@@ -1,3 +1,4 @@
+import org.gradle.api.publish.maven.MavenPublication
 import org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 
@@ -5,9 +6,11 @@ plugins {
     kotlin("multiplatform") version "2.3.20"
     kotlin("plugin.serialization") version "2.3.20"
     id("org.jetbrains.dokka") version "2.2.0"
+    `maven-publish`
 }
 
-version = "0.1.0"
+group = "ru.vitrina"
+version = "0.1.0-rc.2"
 
 kotlin {
     val vitrinaKitXCFramework = XCFramework("VitrinaKit")
@@ -38,6 +41,52 @@ kotlin {
     }
 }
 
+publishing {
+    repositories {
+        maven {
+            name = "Build"
+            url = uri(layout.buildDirectory.dir("repository"))
+        }
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/ni032mas/vitrinakit-kmp")
+            credentials {
+                username = providers.gradleProperty("gpr.user")
+                    .orElse(providers.environmentVariable("GITHUB_ACTOR"))
+                    .orNull
+                password = providers.gradleProperty("gpr.key")
+                    .orElse(providers.environmentVariable("GITHUB_TOKEN"))
+                    .orNull
+            }
+        }
+    }
+    publications.withType<MavenPublication>().configureEach {
+        pom {
+            name = "VitrinaKit KMP SDK"
+            description = "Kotlin Multiplatform SDK for VitrinaKit mobile subscription integrations"
+            url = "https://github.com/ni032mas/vitrinakit-kmp"
+            licenses {
+                license {
+                    name = "Proprietary"
+                    url = "https://github.com/ni032mas/vitrinakit-kmp"
+                }
+            }
+            developers {
+                developer {
+                    id = "ni032mas"
+                    name = "VitrinaKit"
+                    url = "https://github.com/ni032mas"
+                }
+            }
+            scm {
+                connection = "scm:git:git://github.com/ni032mas/vitrinakit-kmp.git"
+                developerConnection = "scm:git:ssh://git@github.com:ni032mas/vitrinakit-kmp.git"
+                url = "https://github.com/ni032mas/vitrinakit-kmp"
+            }
+        }
+    }
+}
+
 dokka {
     dokkaPublications.html {
         moduleName.set("VitrinaKit KMP SDK")
@@ -62,4 +111,14 @@ tasks.register("verifySdk") {
     group = "verification"
     description = "Runs SDK tests and generated documentation checks."
     dependsOn("test", "dokkaGenerate")
+}
+
+tasks.register("verifyReleaseArtifacts") {
+    group = "verification"
+    description = "Builds and publishes SDK release artifacts into the local Maven dry-run repository."
+    dependsOn("verifySdk", "publishAllPublicationsToBuildRepository")
+}
+
+tasks.matching { task -> task.name.endsWith("ToGitHubPackagesRepository") }.configureEach {
+    dependsOn("verifySdk")
 }

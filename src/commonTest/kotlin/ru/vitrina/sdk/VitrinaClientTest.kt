@@ -15,8 +15,9 @@ import ru.vitrina.sdk.model.Entitlement
 import ru.vitrina.sdk.model.Paywall
 import ru.vitrina.sdk.model.PaywallConfig
 import ru.vitrina.sdk.model.PaywallProduct
+import ru.vitrina.sdk.model.EntitlementSource
+import ru.vitrina.sdk.model.SubscriberEntitlementState
 import ru.vitrina.sdk.model.SubscriberState
-import ru.vitrina.sdk.model.SubscriptionState
 import ru.vitrina.sdk.model.SubscriptionStatus
 import ru.vitrina.sdk.model.VitrinaEnvironment
 import ru.vitrina.sdk.model.VitrinaError
@@ -106,8 +107,12 @@ class VitrinaClientTest {
         val result = client.refreshSubscriber(externalUserId = "user-1")
 
         val success = assertIs<VitrinaResult.Success<SubscriberState>>(result)
-        assertEquals(true, success.value.hasActive)
-        assertEquals("full_access", success.value.entitlements.single().key)
+        assertEquals("user-1", success.value.externalUserId)
+        assertEquals(true, success.value.hasAccess)
+        assertEquals("premium_access", success.value.entitlements.single().key)
+        assertEquals("2026-07-22T12:00:00Z", success.value.entitlements.single().expiresAt)
+        assertEquals(EntitlementSource.YOOKASSA, success.value.entitlements.single().source)
+        assertEquals(true, success.value.entitlements.single().autoRenewEnabled)
         assertEquals("/api/v1/subscriber/user-1", http.singleRequest().path)
     }
 
@@ -251,12 +256,18 @@ private val checkoutJson = json.encodeToString(
 
 private val subscriberJson = json.encodeToString(
     SubscriberState(
-        userId = "user-1",
-        hasActive = true,
-        subscriptions = listOf(
-            SubscriptionState(
+        externalUserId = "user-1",
+        hasAccess = true,
+        entitlements = listOf(
+            SubscriberEntitlementState(
+                key = "premium_access",
                 status = SubscriptionStatus.ACTIVE,
-                entitlements = listOf(Entitlement(key = "full_access", name = "Full access")),
+                hasAccess = true,
+                expiresAt = "2026-07-22T12:00:00Z",
+                planKey = "premium",
+                productKey = "premium_monthly",
+                source = EntitlementSource.YOOKASSA,
+                autoRenewEnabled = true,
             ),
         ),
     ),

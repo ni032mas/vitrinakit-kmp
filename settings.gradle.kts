@@ -12,4 +12,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "vitrina-kmp-sdk"
+rootProject.name = "vitrinakit-kmp-sdk"

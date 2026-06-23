@@ -232,44 +232,86 @@ data class CheckoutSession(
 )
 
 /**
- * State of one subscription attached to a subscriber.
- *
- * @property status Current subscription status.
- * @property entitlements Entitlements granted by the subscription.
+ * Provider or store source for subscriber access state.
  */
 @Serializable
-data class SubscriptionState(
-    /** Current subscription status. */
+enum class EntitlementSource {
+    /** Apple App Store subscription source. */
+    @SerialName("apple")
+    APPLE,
+
+    /** Google Play subscription source. */
+    @SerialName("google")
+    GOOGLE,
+
+    /** RuStore subscription source. */
+    @SerialName("rustore")
+    RUSTORE,
+
+    /** YooKassa hosted checkout source. */
+    @SerialName("yookassa")
+    YOOKASSA,
+}
+
+/**
+ * State of one entitlement attached to a subscriber.
+ *
+ * @property key Stable entitlement key used by the integrating app.
+ * @property status Current subscription status backing this entitlement.
+ * @property hasAccess Whether this entitlement currently grants access.
+ * @property expiresAt Expiration timestamp in ISO-8601 UTC format.
+ * @property planKey Stable plan key that granted this entitlement.
+ * @property productKey Stable product key that granted this entitlement.
+ * @property source Provider or store source for this access state.
+ * @property autoRenewEnabled Whether provider-side renewal is enabled.
+ * @property inactiveReason Stable reason when the entitlement does not grant access.
+ */
+@Serializable
+data class SubscriberEntitlementState(
+    /** Stable entitlement key used by the integrating app. */
+    val key: String,
+    /** Current subscription status backing this entitlement. */
     val status: SubscriptionStatus,
-    /** Entitlements granted by the subscription. */
-    val entitlements: List<Entitlement> = emptyList(),
+    /** Whether this entitlement currently grants access. */
+    @SerialName("has_access")
+    val hasAccess: Boolean,
+    /** Expiration timestamp in ISO-8601 UTC format. */
+    @SerialName("expires_at")
+    val expiresAt: String? = null,
+    /** Stable plan key that granted this entitlement. */
+    @SerialName("plan_key")
+    val planKey: String? = null,
+    /** Stable product key that granted this entitlement. */
+    @SerialName("product_key")
+    val productKey: String? = null,
+    /** Provider or store source for this access state. */
+    val source: EntitlementSource,
+    /** Whether provider-side renewal is enabled. */
+    @SerialName("auto_renew_enabled")
+    val autoRenewEnabled: Boolean,
+    /** Stable reason when the entitlement does not grant access. */
+    @SerialName("inactive_reason")
+    val inactiveReason: String? = null,
 )
 
 /**
- * Aggregated subscription state for one external user.
+ * Aggregated access state for one external user.
  *
- * @property userId Server-owned VitrinaKit user identifier.
- * @property hasActive Whether the subscriber currently has any active access.
- * @property subscriptions Subscriptions known for the subscriber.
+ * @property externalUserId Integrating app user identifier.
+ * @property hasAccess Whether the subscriber currently has paid access.
+ * @property entitlements Entitlements known for the subscriber.
  */
 @Serializable
 data class SubscriberState(
-    /** Server-owned VitrinaKit user identifier. */
-    @SerialName("user_id")
-    val userId: String,
-    /** Whether the subscriber currently has any active access. */
-    @SerialName("has_active")
-    val hasActive: Boolean,
-    /** Subscriptions known for the subscriber. */
-    val subscriptions: List<SubscriptionState>,
-) {
-    /**
-     * Distinct entitlements granted by all subscriptions.
-     */
-    val entitlements: List<Entitlement> = subscriptions
-        .flatMap { subscription -> subscription.entitlements }
-        .distinctBy { entitlement -> entitlement.key }
-}
+    /** Integrating app user identifier. */
+    @SerialName("external_user_id")
+    val externalUserId: String,
+    /** Whether the subscriber currently has paid access. */
+    @SerialName("has_access")
+    val hasAccess: Boolean,
+    /** Entitlements known for the subscriber. */
+    val entitlements: List<SubscriberEntitlementState>,
+)
 
 /**
  * Result wrapper used by SDK operations.

@@ -1,0 +1,46 @@
+name: Publish KMP SDK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SDK version to publish, must match build.gradle.kts"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish VitrinaKit KMP SDK
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Validate requested version
+        run: |
+          declared_version="$(grep -E '^version = "' build.gradle.kts | sed -E 's/version = "([^"]+)"/\1/')"
+          if [ "$declared_version" != "${{ inputs.version }}" ]; then
+            echo "Requested version '${{ inputs.version }}' does not match declared version '$declared_version'." >&2
+            exit 1
+          fi
+
+      - name: Verify release artifacts
+        run: ./gradlew verifyReleaseArtifacts
+
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./gradlew publishAllPublicationsToGitHubPackagesRepository

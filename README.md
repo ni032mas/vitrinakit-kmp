@@ -45,6 +45,31 @@ source files, docs, build logs, or mobile application code.
 The verification task runs the JVM SDK tests and Dokka documentation generation
 with warnings treated as failures.
 
+Repository-level verification is also available:
+
+```bash
+make verify
+```
+
+This runs the security gate and local release dry run.
+
+## Development Workflow
+
+`dev` is the default integration branch. `main` is stable and release-only.
+Create short feature branches from `dev`, open pull requests back into `dev`,
+and reserve `main` updates for release PRs.
+
+Install repository-managed git hooks before committing:
+
+```bash
+make install-git-hooks
+```
+
+The hooks require `gitleaks`. The pre-commit hook scans staged changes for
+secrets and blocks direct commits to `dev`/`main`. The commit-msg hook enforces
+Conventional Commits, the pre-merge-commit hook protects `main`, and the
+pre-push hook blocks protected-branch rewrites and runs a full `make verify`.
+
 ## Release Dry Run
 
 ```bash

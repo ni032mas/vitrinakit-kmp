@@ -1,0 +1,34 @@
+.PHONY: help verify security test docs release-dry-run xcframework install-git-hooks clean
+
+help:
+	@printf '%s\n' 'VitrinaKit KMP SDK commands:'
+	@printf '%s\n' '  make verify             Run security checks and release dry-run'
+	@printf '%s\n' '  make security           Run secret and optional filesystem scanners'
+	@printf '%s\n' '  make test               Run JVM SDK tests'
+	@printf '%s\n' '  make docs               Generate Dokka API docs'
+	@printf '%s\n' '  make release-dry-run    Build local Maven/KMP artifacts'
+	@printf '%s\n' '  make xcframework        Build the iOS XCFramework'
+	@printf '%s\n' '  make install-git-hooks  Install repository-managed git hooks'
+
+verify: security release-dry-run
+
+security:
+	scripts/security-gate.sh
+
+test:
+	./gradlew test
+
+docs:
+	./gradlew dokkaGenerate
+
+release-dry-run:
+	./gradlew verifyReleaseArtifacts
+
+xcframework:
+	./gradlew assembleVitrinaKitXCFramework
+
+install-git-hooks:
+	scripts/install-git-hooks.sh
+
+clean:
+	./gradlew clean

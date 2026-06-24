@@ -36,6 +36,70 @@ dependencies {
 Use a GitHub token with package read access for `gpr.key`. Do not put tokens in
 source files, docs, build logs, or mobile application code.
 
+## Quickstart
+
+Activate the SDK once with the public API key from VitrinaKit. Do not pass
+secret API keys or provider credentials to mobile apps.
+
+```kotlin
+import ru.vitrina.sdk.VitrinaKit
+import ru.vitrina.sdk.VitrinaKitConfig
+import ru.vitrina.sdk.model.VitrinaKitResult
+
+VitrinaKit.activate(
+    VitrinaKitConfig.Builder("PUBLIC_API_KEY").build(),
+)
+
+val paywallResult = VitrinaKit.getPaywall(
+    placementId = "main",
+    userId = externalUserId,
+)
+
+when (paywallResult) {
+    is VitrinaKitResult.Success -> {
+        val paywall = paywallResult.value
+        val products = VitrinaKit.getPaywallProducts(paywall)
+        // Render products in your paywall UI.
+    }
+    is VitrinaKitResult.Failure -> {
+        // Show a retry or fallback state.
+    }
+}
+```
+
+Start hosted checkout for the selected product:
+
+```kotlin
+val purchaseResult = VitrinaKit.makePurchase(
+    product = selectedProduct,
+    userId = externalUserId,
+    returnUrl = "myapp://subscription/return",
+)
+```
+
+Refresh the subscriber profile after checkout return, app launch, or restore:
+
+```kotlin
+val profileResult = VitrinaKit.getProfile(userId = externalUserId)
+```
+
+Blocking wrappers are available for JVM/Android call sites that cannot call
+suspend functions:
+
+```kotlin
+val profileResult = VitrinaKit.getProfileBlocking(userId = externalUserId)
+```
+
+Advanced integrations and tests can inject a custom transport:
+
+```kotlin
+VitrinaKit.activate(
+    VitrinaKitConfig.Builder("PUBLIC_API_KEY")
+        .withHttpClient(customTransport)
+        .build(),
+)
+```
+
 ## Verify
 
 ```bash

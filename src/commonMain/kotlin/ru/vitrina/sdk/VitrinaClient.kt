@@ -16,14 +16,14 @@ import ru.vitrina.sdk.model.VitrinaResult
 /**
  * Configuration required to access the VitrinaKit public SDK API.
  *
- * @property appId Public app identifier from the VitrinaKit dashboard.
+ * @property appId Public app identifier from the VitrinaKit dashboard, when required by the API.
  * @property publishableKey SDK-safe publishable key. Never use a secret API key in a mobile app.
  * @property baseUrl VitrinaKit API base URL, for example `https://api.vitrinakit.ru`.
  * @property environment Target VitrinaKit environment.
  */
 data class VitrinaConfig(
-    /** Public app identifier from the VitrinaKit dashboard. */
-    val appId: String,
+    /** Public app identifier from the VitrinaKit dashboard, when required by the API. */
+    val appId: String?,
     /** SDK-safe publishable key. Never use a secret API key in a mobile app. */
     val publishableKey: String,
     /** VitrinaKit API base URL, for example `https://api.vitrinakit.ru`. */
@@ -171,18 +171,19 @@ class VitrinaClient(
     }
 
     private fun validateConfig(): VitrinaError.Configuration? = when {
-        config.appId.isBlank() -> VitrinaError.Configuration("appId is required.")
         config.publishableKey.isBlank() -> VitrinaError.Configuration("publishableKey is required.")
         config.baseUrl.isBlank() -> VitrinaError.Configuration("baseUrl is required.")
         else -> null
     }
 
-    private fun authHeaders(): Map<String, String> = mapOf(
-        "Authorization" to "PublishableKey ${config.publishableKey}",
-        "Content-Type" to "application/json",
-        "X-Vitrina-App-Id" to config.appId,
-        "X-Vitrina-Environment" to config.environment.name,
-    )
+    private fun authHeaders(): Map<String, String> = buildMap {
+        put("Authorization", "PublishableKey ${config.publishableKey}")
+        put("Content-Type", "application/json")
+        config.appId?.takeIf { it.isNotBlank() }?.let { appId ->
+            put("X-Vitrina-App-Id", appId)
+        }
+        put("X-Vitrina-Environment", config.environment.name)
+    }
 
     private fun paywallPath(placementKey: String, userContext: UserContext): String {
         val normalizedPlacement = normalizePlacementKey(placementKey)

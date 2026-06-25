@@ -3,7 +3,6 @@ package ru.vitrina.sdk
 import kotlinx.coroutines.runBlocking
 import ru.vitrina.sdk.http.KtorVitrinaHttpClient
 import ru.vitrina.sdk.http.VitrinaHttpClient
-import ru.vitrina.sdk.model.VitrinaEnvironment
 import ru.vitrina.sdk.model.VitrinaKitError
 import ru.vitrina.sdk.model.VitrinaKitPaywall
 import ru.vitrina.sdk.model.VitrinaKitPaywallProduct
@@ -71,8 +70,6 @@ object VitrinaKit {
             config = VitrinaConfig(
                 appId = config.appId,
                 publishableKey = config.publicApiKey,
-                baseUrl = DefaultApiBaseUrl,
-                environment = VitrinaEnvironment.PRODUCTION,
             ),
             httpClient = config.httpClient ?: KtorVitrinaHttpClient(),
         )
@@ -182,5 +179,3 @@ private fun ru.vitrina.sdk.model.VitrinaError.toKitError(): VitrinaKitError = wh
     is ru.vitrina.sdk.model.VitrinaError.Configuration -> VitrinaKitError.Configuration(message)
     is ru.vitrina.sdk.model.VitrinaError.Subscription -> VitrinaKitError.Subscription(message)
 }
-
-private const val DefaultApiBaseUrl = "https://api.vitrinakit.ru"

@@ -9,7 +9,6 @@ import ru.vitrina.sdk.http.VitrinaHttpRequest
 import ru.vitrina.sdk.model.CheckoutSession
 import ru.vitrina.sdk.model.Paywall
 import ru.vitrina.sdk.model.SubscriberState
-import ru.vitrina.sdk.model.VitrinaEnvironment
 import ru.vitrina.sdk.model.VitrinaError
 import ru.vitrina.sdk.model.VitrinaResult
 
@@ -18,19 +17,16 @@ import ru.vitrina.sdk.model.VitrinaResult
  *
  * @property appId Public app identifier from the VitrinaKit dashboard, when required by the API.
  * @property publishableKey SDK-safe publishable key. Never use a secret API key in a mobile app.
- * @property baseUrl VitrinaKit API base URL, for example `https://api.vitrinakit.ru`.
- * @property environment Target VitrinaKit environment.
  */
 data class VitrinaConfig(
     /** Public app identifier from the VitrinaKit dashboard, when required by the API. */
     val appId: String?,
     /** SDK-safe publishable key. Never use a secret API key in a mobile app. */
     val publishableKey: String,
-    /** VitrinaKit API base URL, for example `https://api.vitrinakit.ru`. */
-    val baseUrl: String,
-    /** Target VitrinaKit environment. */
-    val environment: VitrinaEnvironment,
-)
+) {
+    internal val baseUrl: String = VitrinaKitApiBaseUrl
+    internal val environment = VitrinaKitApiEnvironment
+}
 
 /**
  * End-user context sent with SDK API requests.
@@ -172,7 +168,6 @@ class VitrinaClient(
 
     private fun validateConfig(): VitrinaError.Configuration? = when {
         config.publishableKey.isBlank() -> VitrinaError.Configuration("publishableKey is required.")
-        config.baseUrl.isBlank() -> VitrinaError.Configuration("baseUrl is required.")
         else -> null
     }
 

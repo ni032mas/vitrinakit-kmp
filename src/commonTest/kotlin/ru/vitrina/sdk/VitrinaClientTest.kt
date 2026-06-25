@@ -19,7 +19,6 @@ import ru.vitrina.sdk.model.EntitlementSource
 import ru.vitrina.sdk.model.SubscriberEntitlementState
 import ru.vitrina.sdk.model.SubscriberState
 import ru.vitrina.sdk.model.SubscriptionStatus
-import ru.vitrina.sdk.model.VitrinaEnvironment
 import ru.vitrina.sdk.model.VitrinaError
 import ru.vitrina.sdk.model.VitrinaKitError
 import ru.vitrina.sdk.model.VitrinaKitPaywall
@@ -65,6 +64,11 @@ class VitrinaClientTest {
         val success = assertIs<VitrinaKitResult.Success<VitrinaKitPaywall>>(result)
         assertEquals("main", success.value.placementKey)
         assertEquals("PublishableKey pk_test", http.singleRequest().headers["Authorization"])
+        assertEquals(
+            "$VitrinaKitApiBaseUrl/api/v1/paywall/main?external_user_id=user-1",
+            http.singleRequest().url,
+        )
+        assertEquals(VitrinaKitApiEnvironment.name, http.singleRequest().headers["X-Vitrina-Environment"])
     }
 
     @Test
@@ -300,8 +304,6 @@ class VitrinaClientTest {
             config = VitrinaConfig(
                 appId = "app-1",
                 publishableKey = "",
-                baseUrl = "https://api.vitrinakit.ru",
-                environment = VitrinaEnvironment.SANDBOX,
             ),
             httpClient = FakeHttpClient(),
         )
@@ -316,8 +318,6 @@ private fun newClient(http: VitrinaHttpClient = FakeHttpClient()): VitrinaClient
     config = VitrinaConfig(
         appId = "app-1",
         publishableKey = "pk_test",
-        baseUrl = "https://api.vitrinakit.ru/",
-        environment = VitrinaEnvironment.SANDBOX,
     ),
     httpClient = http,
 )

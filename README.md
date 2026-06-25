@@ -33,6 +33,11 @@ dependencies {
 }
 ```
 
+Use `vitrinakit-kmp-sdk` for production integrations. Use
+`vitrinakit-kmp-sdk-dev` for development integrations that must call the
+development VitrinaKit API endpoint. The API URL is compiled into the published
+SDK artifact and is not configured by mobile application code.
+
 Use a GitHub token with package read access for `gpr.key`. Do not put tokens in
 source files, docs, build logs, or mobile application code.
 
@@ -147,15 +152,24 @@ Expected output:
 - Maven/KMP artifacts are written under `build/repository`;
 - no GitHub Packages credentials are required.
 
-The local dry-run repository should contain the root multiplatform publication
-at `build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.2/` and target
+The production dry-run repository should contain the root multiplatform
+publication at
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.2/` and target
 publications such as JVM/iOS variants with Kotlin-generated artifact suffixes.
+The development dry-run uses `-PvitrinaKitPublication=development` and writes
+the root publication to
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk-dev/0.1.0-rc.2/`.
 
 ## Publish
 
 Real publication uses the `GitHubPackages` Gradle repository. Prefer the
 manual `Publish KMP SDK` GitHub Actions workflow and pass the exact SDK
-version.
+version. The workflow publishes both production and development SDK artifacts:
+
+- `ru.vitrina:vitrinakit-kmp-sdk:<version>` uses
+  `https://api.vitrinakit.ru`;
+- `ru.vitrina:vitrinakit-kmp-sdk-dev:<version>` uses
+  `https://dev.vitrinakit.ru`.
 
 The workflow publishes from `ni032mas/vitrinakit-kmp` to that repository's own
 GitHub Packages registry using the built-in `GITHUB_TOKEN` and
@@ -167,6 +181,10 @@ Local publication is also possible when a package token is available:
 GITHUB_ACTOR=<github-user> GITHUB_TOKEN=<package-token> \
   ./gradlew publishAllPublicationsToGitHubPackagesRepository
 ```
+
+For local development artifact publication, add
+`-PvitrinaKitPublication=development` or set
+`VITRINAKIT_PUBLICATION=development`.
 
 Publication tasks depend on `verifySdk`.
 

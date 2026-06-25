@@ -1,4 +1,10 @@
 import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.TaskAction
 import org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 
@@ -11,6 +17,78 @@ plugins {
 
 group = "ru.vitrina"
 version = "0.1.0-rc.2"
+
+enum class VitrinaKitPublication(
+    val propertyValue: String,
+    val artifactSuffix: String,
+    val apiBaseUrl: String,
+    val environment: String,
+) {
+    Production(
+        propertyValue = "production",
+        artifactSuffix = "",
+        apiBaseUrl = "https://api.vitrinakit.ru",
+        environment = "PRODUCTION",
+    ),
+    Development(
+        propertyValue = "development",
+        artifactSuffix = "-dev",
+        apiBaseUrl = "https://dev.vitrinakit.ru",
+        environment = "SANDBOX",
+    ),
+}
+
+val vitrinaKitPublicationName = providers.gradleProperty("vitrinaKitPublication")
+    .orElse(providers.environmentVariable("VITRINAKIT_PUBLICATION"))
+    .orElse(VitrinaKitPublication.Production.propertyValue)
+    .get()
+    .lowercase()
+val vitrinaKitPublication = VitrinaKitPublication.entries.firstOrNull { publication ->
+    publication.propertyValue == vitrinaKitPublicationName
+} ?: error(
+    "Unsupported VitrinaKit publication '$vitrinaKitPublicationName'. " +
+        "Use 'production' or 'development'.",
+)
+
+abstract class GenerateVitrinaKitPublicationConfigTask : DefaultTask() {
+    @get:Input
+    abstract val apiBaseUrl: Property<String>
+
+    @get:Input
+    abstract val environment: Property<String>
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val outputFile = outputDirectory
+            .file("ru/vitrina/sdk/VitrinaKitPublicationConfig.kt")
+            .get()
+            .asFile
+        outputFile.parentFile.mkdirs()
+        outputFile.writeText(
+            """
+            package ru.vitrina.sdk
+
+            import ru.vitrina.sdk.model.VitrinaEnvironment
+
+            internal const val VitrinaKitApiBaseUrl = "${apiBaseUrl.get()}"
+            internal val VitrinaKitApiEnvironment: VitrinaEnvironment = VitrinaEnvironment.${environment.get()}
+            """.trimIndent() + "\n",
+        )
+    }
+}
+
+val generateVitrinaKitPublicationConfig by tasks.registering(GenerateVitrinaKitPublicationConfigTask::class) {
+    apiBaseUrl.set(vitrinaKitPublication.apiBaseUrl)
+    environment.set(vitrinaKitPublication.environment)
+    outputDirectory.set(
+        layout.buildDirectory.dir(
+            "generated/vitrinakit-publication-config/${vitrinaKitPublication.propertyValue}/commonMain/kotlin",
+        ),
+    )
+}
 
 kotlin {
     val vitrinaKitXCFramework = XCFramework("VitrinaKit")
@@ -30,6 +108,9 @@ kotlin {
     }
 
     sourceSets {
+        commonMain {
+            kotlin.srcDir(generateVitrinaKitPublicationConfig)
+        }
         commonMain.dependencies {
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
@@ -68,6 +149,7 @@ publishing {
         }
     }
     publications.withType<MavenPublication>().configureEach {
+        artifactId += vitrinaKitPublication.artifactSuffix
         pom {
             name = "VitrinaKit KMP SDK"
             description = "Kotlin Multiplatform SDK for VitrinaKit mobile subscription integrations"

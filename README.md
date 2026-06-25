@@ -9,7 +9,7 @@ repository to its own GitHub Packages Maven registry.
 
 ## Version
 
-Current release candidate: `0.1.0-rc.2`.
+Current release candidate: `0.1.0-rc.3`.
 
 SDK versions are changed only as part of a release task. Do not bump `version`
 in `build.gradle.kts` for normal feature work.
@@ -29,7 +29,7 @@ repositories {
 }
 
 dependencies {
-    implementation("ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.2")
+    implementation("ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.3")
 }
 ```
 
@@ -154,11 +154,11 @@ Expected output:
 
 The production dry-run repository should contain the root multiplatform
 publication at
-`build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.2/` and target
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.3/` and target
 publications such as JVM/iOS variants with Kotlin-generated artifact suffixes.
 The development dry-run uses `-PvitrinaKitPublication=development` and writes
 the root publication to
-`build/repository/ru/vitrina/vitrinakit-kmp-sdk-dev/0.1.0-rc.2/`.
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk-dev/0.1.0-rc.3/`.
 
 ## Publish
 

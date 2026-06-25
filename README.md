@@ -33,8 +33,77 @@ dependencies {
 }
 ```
 
+Use `vitrinakit-kmp-sdk` for production integrations. Use
+`vitrinakit-kmp-sdk-dev` for development integrations that must call the
+development VitrinaKit API endpoint. The API URL is compiled into the published
+SDK artifact and is not configured by mobile application code.
+
 Use a GitHub token with package read access for `gpr.key`. Do not put tokens in
 source files, docs, build logs, or mobile application code.
+
+## Quickstart
+
+Activate the SDK once with the public API key from VitrinaKit. Do not pass
+secret API keys or provider credentials to mobile apps.
+
+```kotlin
+import ru.vitrina.sdk.VitrinaKit
+import ru.vitrina.sdk.VitrinaKitConfig
+import ru.vitrina.sdk.model.VitrinaKitResult
+
+VitrinaKit.activate(
+    VitrinaKitConfig.Builder("PUBLIC_API_KEY").build(),
+)
+
+val paywallResult = VitrinaKit.getPaywall(
+    placementId = "main",
+    userId = externalUserId,
+)
+
+when (paywallResult) {
+    is VitrinaKitResult.Success -> {
+        val paywall = paywallResult.value
+        val products = VitrinaKit.getPaywallProducts(paywall)
+        // Render products in your paywall UI.
+    }
+    is VitrinaKitResult.Failure -> {
+        // Show a retry or fallback state.
+    }
+}
+```
+
+Start hosted checkout for the selected product:
+
+```kotlin
+val purchaseResult = VitrinaKit.makePurchase(
+    product = selectedProduct,
+    userId = externalUserId,
+    returnUrl = "myapp://subscription/return",
+)
+```
+
+Refresh the subscriber profile after checkout return, app launch, or restore:
+
+```kotlin
+val profileResult = VitrinaKit.getProfile(userId = externalUserId)
+```
+
+Blocking wrappers are available for JVM/Android call sites that cannot call
+suspend functions:
+
+```kotlin
+val profileResult = VitrinaKit.getProfileBlocking(userId = externalUserId)
+```
+
+Advanced integrations and tests can inject a custom transport:
+
+```kotlin
+VitrinaKit.activate(
+    VitrinaKitConfig.Builder("PUBLIC_API_KEY")
+        .withHttpClient(customTransport)
+        .build(),
+)
+```
 
 ## Verify
 
@@ -83,15 +152,24 @@ Expected output:
 - Maven/KMP artifacts are written under `build/repository`;
 - no GitHub Packages credentials are required.
 
-The local dry-run repository should contain the root multiplatform publication
-at `build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.2/` and target
+The production dry-run repository should contain the root multiplatform
+publication at
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.2/` and target
 publications such as JVM/iOS variants with Kotlin-generated artifact suffixes.
+The development dry-run uses `-PvitrinaKitPublication=development` and writes
+the root publication to
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk-dev/0.1.0-rc.2/`.
 
 ## Publish
 
 Real publication uses the `GitHubPackages` Gradle repository. Prefer the
 manual `Publish KMP SDK` GitHub Actions workflow and pass the exact SDK
-version.
+version. The workflow publishes both production and development SDK artifacts:
+
+- `ru.vitrina:vitrinakit-kmp-sdk:<version>` uses
+  `https://api.vitrinakit.ru`;
+- `ru.vitrina:vitrinakit-kmp-sdk-dev:<version>` uses
+  `https://dev.vitrinakit.ru`.
 
 The workflow publishes from `ni032mas/vitrinakit-kmp` to that repository's own
 GitHub Packages registry using the built-in `GITHUB_TOKEN` and
@@ -103,6 +181,10 @@ Local publication is also possible when a package token is available:
 GITHUB_ACTOR=<github-user> GITHUB_TOKEN=<package-token> \
   ./gradlew publishAllPublicationsToGitHubPackagesRepository
 ```
+
+For local development artifact publication, add
+`-PvitrinaKitPublication=development` or set
+`VITRINAKIT_PUBLICATION=development`.
 
 Publication tasks depend on `verifySdk`.
 

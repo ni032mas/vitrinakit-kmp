@@ -392,3 +392,101 @@ sealed class VitrinaError {
         val message: String,
     ) : VitrinaError()
 }
+
+/** VitrinaKit SDK environment alias used by the public facade. */
+typealias VitrinaKitEnvironment = VitrinaEnvironment
+
+/** VitrinaKit paywall payload returned by the public facade. */
+typealias VitrinaKitPaywall = Paywall
+
+/** VitrinaKit product option returned for a paywall. */
+typealias VitrinaKitPaywallProduct = PaywallProduct
+
+/** VitrinaKit hosted purchase or checkout session returned by the public facade. */
+typealias VitrinaKitPurchase = CheckoutSession
+
+/** VitrinaKit subscriber profile returned by the public facade. */
+typealias VitrinaKitProfile = SubscriberState
+
+/** VitrinaKit access level state returned inside a profile. */
+typealias VitrinaKitAccessLevel = SubscriberEntitlementState
+
+/**
+ * Result wrapper returned by high-level VitrinaKit facade operations.
+ */
+sealed class VitrinaKitResult<out T> {
+    /**
+     * Successful SDK operation.
+     *
+     * @property value Decoded operation value.
+     */
+    data class Success<T>(
+        /** Decoded operation value. */
+        val value: T,
+    ) : VitrinaKitResult<T>()
+
+    /**
+     * Failed SDK operation.
+     *
+     * @property error Normalized SDK error.
+     */
+    data class Failure(
+        /** Normalized SDK error. */
+        val error: VitrinaKitError,
+    ) : VitrinaKitResult<Nothing>()
+}
+
+/**
+ * Normalized error returned by high-level VitrinaKit facade operations.
+ */
+sealed class VitrinaKitError {
+    /**
+     * Authentication or authorization failure.
+     *
+     * @property message Error message returned by the SDK or API.
+     */
+    data class Auth(
+        /** Error message returned by the SDK or API. */
+        val message: String,
+    ) : VitrinaKitError()
+
+    /**
+     * Network, transport, or response decoding failure.
+     *
+     * @property message Error message returned by the SDK or API.
+     */
+    data class Network(
+        /** Error message returned by the SDK or API. */
+        val message: String,
+    ) : VitrinaKitError()
+
+    /**
+     * Payment provider failure.
+     *
+     * @property message Error message returned by the SDK or API.
+     */
+    data class Provider(
+        /** Error message returned by the SDK or API. */
+        val message: String,
+    ) : VitrinaKitError()
+
+    /**
+     * SDK or server-side configuration failure.
+     *
+     * @property message Error message returned by the SDK or API.
+     */
+    data class Configuration(
+        /** Error message returned by the SDK or API. */
+        val message: String,
+    ) : VitrinaKitError()
+
+    /**
+     * Subscriber or subscription lookup failure.
+     *
+     * @property message Error message returned by the SDK or API.
+     */
+    data class Subscription(
+        /** Error message returned by the SDK or API. */
+        val message: String,
+    ) : VitrinaKitError()
+}

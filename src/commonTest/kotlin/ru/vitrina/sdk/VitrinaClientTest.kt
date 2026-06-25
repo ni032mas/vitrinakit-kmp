@@ -19,11 +19,145 @@ import ru.vitrina.sdk.model.EntitlementSource
 import ru.vitrina.sdk.model.SubscriberEntitlementState
 import ru.vitrina.sdk.model.SubscriberState
 import ru.vitrina.sdk.model.SubscriptionStatus
-import ru.vitrina.sdk.model.VitrinaEnvironment
 import ru.vitrina.sdk.model.VitrinaError
+import ru.vitrina.sdk.model.VitrinaKitError
+import ru.vitrina.sdk.model.VitrinaKitPaywall
+import ru.vitrina.sdk.model.VitrinaKitPurchase
+import ru.vitrina.sdk.model.VitrinaKitProfile
+import ru.vitrina.sdk.model.VitrinaKitResult
 import ru.vitrina.sdk.model.VitrinaResult
 
 class VitrinaClientTest {
+    @Test
+    fun facadeRequiresActivationBeforeUse() = runTest {
+        VitrinaKit.resetForTesting()
+
+        val result = VitrinaKit.getPaywall(
+            placementId = "main",
+            userId = "user-1",
+        )
+
+        val failure = assertIs<VitrinaKitResult.Failure>(result)
+        assertIs<VitrinaKitError.Configuration>(failure.error)
+    }
+
+    @Test
+    fun facadeFetchesPaywallAfterActivation() = runTest {
+        val http = FakeHttpClient(
+            response = VitrinaHttpResponse(
+                statusCode = HttpStatusOk,
+                body = paywallJson,
+            ),
+        )
+        VitrinaKit.activate(
+            VitrinaKitConfig.Builder("pk_test")
+                .withAppId("app-1")
+                .withHttpClient(http)
+                .build(),
+        )
+
+        val result = VitrinaKit.getPaywall(
+            placementId = "main",
+            userId = "user-1",
+        )
+
+        val success = assertIs<VitrinaKitResult.Success<VitrinaKitPaywall>>(result)
+        assertEquals("main", success.value.placementKey)
+        assertEquals("PublishableKey pk_test", http.singleRequest().headers["Authorization"])
+        assertEquals(
+            "$VitrinaKitApiBaseUrl/api/v1/paywall/main?external_user_id=user-1",
+            http.singleRequest().url,
+        )
+        assertEquals(VitrinaKitApiEnvironment.name, http.singleRequest().headers["X-Vitrina-Environment"])
+    }
+
+    @Test
+    fun facadeReturnsProductsFromPaywall() {
+        val paywall = Paywall(
+            placementKey = "main",
+            paywallId = "paywall-1",
+            config = PaywallConfig(template = "default"),
+            fallbackConfig = PaywallConfig(template = "fallback"),
+            products = listOf(monthlyProduct()),
+        )
+
+        val result = VitrinaKit.getPaywallProducts(paywall)
+
+        val success = assertIs<VitrinaKitResult.Success<List<PaywallProduct>>>(result)
+        assertEquals("price-1", success.value.single().priceId)
+    }
+
+    @Test
+    fun facadeCreatesPurchaseFromPaywallProduct() = runTest {
+        val http = FakeHttpClient(
+            response = VitrinaHttpResponse(
+                statusCode = HttpStatusCreated,
+                body = checkoutJson,
+            ),
+        )
+        VitrinaKit.activate(
+            VitrinaKitConfig.Builder("pk_test")
+                .withAppId("app-1")
+                .withHttpClient(http)
+                .build(),
+        )
+
+        val result = VitrinaKit.makePurchase(
+            product = monthlyProduct(),
+            userId = "user-1",
+            returnUrl = "vitrina://done",
+        )
+
+        val success = assertIs<VitrinaKitResult.Success<VitrinaKitPurchase>>(result)
+        assertEquals("https://pay.example/confirm", success.value.confirmationUrl)
+        assertEquals("/api/v1/checkout/sessions", http.singleRequest().path)
+    }
+
+    @Test
+    fun facadeGetsProfile() = runTest {
+        val http = FakeHttpClient(
+            response = VitrinaHttpResponse(
+                statusCode = HttpStatusOk,
+                body = subscriberJson,
+            ),
+        )
+        VitrinaKit.activate(
+            VitrinaKitConfig.Builder("pk_test")
+                .withAppId("app-1")
+                .withHttpClient(http)
+                .build(),
+        )
+
+        val result = VitrinaKit.getProfile(userId = "user-1")
+
+        val success = assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(result)
+        assertEquals(true, success.value.hasAccess)
+        assertEquals("premium_access", success.value.entitlements.single().key)
+    }
+
+    @Test
+    fun facadeBlockingWrapperFetchesPaywall() {
+        val http = FakeHttpClient(
+            response = VitrinaHttpResponse(
+                statusCode = HttpStatusOk,
+                body = paywallJson,
+            ),
+        )
+        VitrinaKit.activate(
+            VitrinaKitConfig.Builder("pk_test")
+                .withAppId("app-1")
+                .withHttpClient(http)
+                .build(),
+        )
+
+        val result = VitrinaKit.getPaywallBlocking(
+            placementId = "main",
+            userId = "user-1",
+        )
+
+        assertIs<VitrinaKitResult.Success<VitrinaKitPaywall>>(result)
+    }
+
     @Test
     fun fetchPaywallSerializesUserContext() = runTest {
         val http = FakeHttpClient(
@@ -168,10 +302,8 @@ class VitrinaClientTest {
     fun invalidConfigurationMapsToTypedError() = runTest {
         val client = VitrinaClient(
             config = VitrinaConfig(
-                appId = "",
-                publishableKey = "pk_test",
-                baseUrl = "https://api.vitrinakit.ru",
-                environment = VitrinaEnvironment.SANDBOX,
+                appId = "app-1",
+                publishableKey = "",
             ),
             httpClient = FakeHttpClient(),
         )
@@ -186,8 +318,6 @@ private fun newClient(http: VitrinaHttpClient = FakeHttpClient()): VitrinaClient
     config = VitrinaConfig(
         appId = "app-1",
         publishableKey = "pk_test",
-        baseUrl = "https://api.vitrinakit.ru/",
-        environment = VitrinaEnvironment.SANDBOX,
     ),
     httpClient = http,
 )
@@ -218,30 +348,30 @@ private const val HttpStatusConflict = 409
 
 private val json = Json { encodeDefaults = true }
 
+private fun monthlyProduct(): PaywallProduct = PaywallProduct(
+    productId = "product-1",
+    productKey = "premium_monthly",
+    productName = "Monthly",
+    planId = "plan-1",
+    planKey = "premium",
+    planName = "Premium",
+    priceId = "price-1",
+    amountMinor = 19900,
+    currency = "RUB",
+    intervalUnit = BillingIntervalUnit.MONTH,
+    intervalCount = 1,
+    highlighted = true,
+    sortOrder = 10,
+    entitlements = listOf(Entitlement(key = "full_access", name = "Full access")),
+)
+
 private val paywallJson = json.encodeToString(
     Paywall(
         placementKey = "main",
         paywallId = "paywall-1",
         config = PaywallConfig(template = "default"),
         fallbackConfig = PaywallConfig(template = "fallback"),
-        products = listOf(
-            PaywallProduct(
-                productId = "product-1",
-                productKey = "premium_monthly",
-                productName = "Monthly",
-                planId = "plan-1",
-                planKey = "premium",
-                planName = "Premium",
-                priceId = "price-1",
-                amountMinor = 19900,
-                currency = "RUB",
-                intervalUnit = BillingIntervalUnit.MONTH,
-                intervalCount = 1,
-                highlighted = true,
-                sortOrder = 10,
-                entitlements = listOf(Entitlement(key = "full_access", name = "Full access")),
-            ),
-        ),
+        products = listOf(monthlyProduct()),
     ),
 )
 

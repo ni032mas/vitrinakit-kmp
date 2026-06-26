@@ -1,5 +1,21 @@
 # VitrinaKit KMP SDK Changelog
 
+## 0.1.0-rc.4
+
+Development endpoint correction release candidate.
+
+### Fixed
+
+- Development SDK artifacts now compile the API base URL as
+  `https://api.dev.vitrinakit.ru`.
+
+### Release Channel
+
+- Production coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.4`.
+- Development coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk-dev:0.1.0-rc.4`.
+
 ## 0.1.0-rc.3
 
 Release candidate for the Adapty-style VitrinaKit mobile SDK facade.

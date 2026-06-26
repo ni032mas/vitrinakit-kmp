@@ -16,7 +16,7 @@ plugins {
 }
 
 group = "ru.vitrina"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 
 enum class VitrinaKitPublication(
     val propertyValue: String,
@@ -33,7 +33,7 @@ enum class VitrinaKitPublication(
     Development(
         propertyValue = "development",
         artifactSuffix = "-dev",
-        apiBaseUrl = "https://dev.vitrinakit.ru",
+        apiBaseUrl = "https://api.dev.vitrinakit.ru",
         environment = "SANDBOX",
     ),
 }

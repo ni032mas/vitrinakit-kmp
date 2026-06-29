@@ -2,6 +2,8 @@ package ru.vitrina.sdk
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -105,12 +107,15 @@ class VitrinaClientTest {
         val result = VitrinaKit.makePurchase(
             product = monthlyProduct(),
             userId = "user-1",
+            receiptEmail = "buyer@example.com",
             returnUrl = "vitrina://done",
         )
 
         val success = assertIs<VitrinaKitResult.Success<VitrinaKitPurchase>>(result)
+        assertEquals("session-1", success.value.id)
         assertEquals("https://pay.example/confirm", success.value.confirmationUrl)
         assertEquals("/api/v1/checkout/sessions", http.singleRequest().path)
+        assertEquals("buyer@example.com", http.singleRequest().jsonBodyValue("receipt_email"))
     }
 
     @Test
@@ -218,14 +223,67 @@ class VitrinaClientTest {
                 externalUserId = "user-1",
                 productId = "product-1",
                 priceId = "price-1",
+                receiptEmail = "buyer@example.com",
                 returnUrl = "vitrina://done",
             ),
         )
 
         val success = assertIs<VitrinaResult.Success<CheckoutSession>>(result)
+        assertEquals("session-1", success.value.id)
+        assertEquals("payment-1", success.value.paymentId)
+        assertEquals("pay_1", success.value.providerPaymentId)
         assertEquals("https://pay.example/confirm", success.value.confirmationUrl)
+        assertEquals("pending", success.value.status)
+        assertEquals("2026-07-22T12:00:00Z", success.value.expiresAt)
+        assertEquals(false, success.value.reused)
         assertEquals("/api/v1/checkout/sessions", http.singleRequest().path)
         assertEquals(VitrinaHttpMethod.POST, http.singleRequest().method)
+        assertEquals("buyer@example.com", http.singleRequest().jsonBodyValue("receipt_email"))
+    }
+
+    @Test
+    fun checkoutSessionRequestSerializesReceiptEmail() {
+        val payload = json.encodeToString(
+            CheckoutSessionRequest(
+                externalUserId = "user-1",
+                productId = "product-1",
+                priceId = "price-1",
+                receiptEmail = "buyer@example.com",
+                returnUrl = "vitrina://done",
+            ),
+        )
+
+        val body = Json.parseToJsonElement(payload).jsonObject
+        assertEquals("user-1", body.getValue("external_user_id").jsonPrimitive.content)
+        assertEquals("product-1", body.getValue("product_id").jsonPrimitive.content)
+        assertEquals("price-1", body.getValue("price_id").jsonPrimitive.content)
+        assertEquals("buyer@example.com", body.getValue("receipt_email").jsonPrimitive.content)
+        assertEquals("vitrina://done", body.getValue("return_url").jsonPrimitive.content)
+    }
+
+    @Test
+    fun checkoutSessionDeserializesPublicContract() {
+        val payload = """
+            {
+              "id": "session-1",
+              "payment_id": "payment-1",
+              "provider_payment_id": "pay_1",
+              "confirmation_url": "https://pay.example/confirm",
+              "status": "pending",
+              "expires_at": "2026-07-22T12:00:00Z",
+              "reused": true
+            }
+        """.trimIndent()
+
+        val session = json.decodeFromString<CheckoutSession>(payload)
+
+        assertEquals("session-1", session.id)
+        assertEquals("payment-1", session.paymentId)
+        assertEquals("pay_1", session.providerPaymentId)
+        assertEquals("https://pay.example/confirm", session.confirmationUrl)
+        assertEquals("pending", session.status)
+        assertEquals("2026-07-22T12:00:00Z", session.expiresAt)
+        assertEquals(true, session.reused)
     }
 
     @Test
@@ -287,7 +345,7 @@ class VitrinaClientTest {
         val provider = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusConflict, errorJson)),
         ).createCheckoutSession(
-            CheckoutSessionRequest("user-1", "product-1", "price-1", "vitrina://done"),
+            CheckoutSessionRequest("user-1", "product-1", "price-1", "buyer@example.com", "vitrina://done"),
         )
         val subscription = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusNotFound, errorJson)),
@@ -340,6 +398,11 @@ private class FakeHttpClient(
     fun singleRequest(): VitrinaHttpRequest = requests.single()
 }
 
+private fun VitrinaHttpRequest.jsonBodyValue(name: String): String {
+    val parsed = Json.parseToJsonElement(body.orEmpty()).jsonObject
+    return parsed.getValue(name).jsonPrimitive.content
+}
+
 private const val HttpStatusOk = 200
 private const val HttpStatusCreated = 201
 private const val HttpStatusUnauthorized = 401
@@ -377,10 +440,13 @@ private val paywallJson = json.encodeToString(
 
 private val checkoutJson = json.encodeToString(
     CheckoutSession(
+        id = "session-1",
         paymentId = "payment-1",
         providerPaymentId = "pay_1",
         confirmationUrl = "https://pay.example/confirm",
         status = "pending",
+        expiresAt = "2026-07-22T12:00:00Z",
+        reused = false,
     ),
 )
 

@@ -78,6 +78,7 @@ Start hosted checkout for the selected product:
 val purchaseResult = VitrinaKit.makePurchase(
     product = selectedProduct,
     userId = externalUserId,
+    receiptEmail = "buyer@example.com",
     returnUrl = "myapp://subscription/return",
 )
 ```

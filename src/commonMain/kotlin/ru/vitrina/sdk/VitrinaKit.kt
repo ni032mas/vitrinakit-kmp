@@ -101,6 +101,7 @@ object VitrinaKit {
     suspend fun makePurchase(
         product: VitrinaKitPaywallProduct,
         userId: String,
+        receiptEmail: String,
         returnUrl: String,
     ): VitrinaKitResult<VitrinaKitPurchase> = activeClient().flatMap { client ->
         client.createCheckoutSession(
@@ -108,6 +109,7 @@ object VitrinaKit {
                 externalUserId = userId,
                 productId = product.productId,
                 priceId = product.priceId,
+                receiptEmail = receiptEmail,
                 returnUrl = returnUrl,
             ),
         ).toKitResult()
@@ -137,9 +139,10 @@ object VitrinaKit {
     fun makePurchaseBlocking(
         product: VitrinaKitPaywallProduct,
         userId: String,
+        receiptEmail: String,
         returnUrl: String,
     ): VitrinaKitResult<VitrinaKitPurchase> = runBlocking {
-        makePurchase(product = product, userId = userId, returnUrl = returnUrl)
+        makePurchase(product = product, userId = userId, receiptEmail = receiptEmail, returnUrl = returnUrl)
     }
 
     /**

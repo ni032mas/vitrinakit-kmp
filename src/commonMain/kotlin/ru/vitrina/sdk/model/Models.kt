@@ -211,13 +211,18 @@ data class Paywall(
 /**
  * Hosted checkout session created by VitrinaKit.
  *
+ * @property id Checkout session identifier.
  * @property paymentId VitrinaKit payment identifier.
  * @property providerPaymentId Payment provider identifier.
  * @property confirmationUrl URL that opens provider-hosted payment confirmation.
  * @property status Current checkout session status.
+ * @property expiresAt Expiration timestamp in ISO-8601 UTC format.
+ * @property reused Whether the session reused an existing open checkout.
  */
 @Serializable
 data class CheckoutSession(
+    /** Checkout session identifier. */
+    val id: String,
     /** VitrinaKit payment identifier. */
     @SerialName("payment_id")
     val paymentId: String,
@@ -229,6 +234,11 @@ data class CheckoutSession(
     val confirmationUrl: String,
     /** Current checkout session status. */
     val status: String,
+    /** Expiration timestamp in ISO-8601 UTC format. */
+    @SerialName("expires_at")
+    val expiresAt: String,
+    /** Whether the session reused an existing open checkout. */
+    val reused: Boolean,
 )
 
 /**

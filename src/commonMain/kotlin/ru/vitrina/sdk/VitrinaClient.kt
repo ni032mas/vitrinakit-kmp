@@ -47,6 +47,7 @@ data class UserContext(
  * @property externalUserId Stable user identifier from the integrating product.
  * @property productId Server-owned product identifier returned by a paywall response.
  * @property priceId Server-owned price identifier returned by a paywall response.
+ * @property receiptEmail Email address used for checkout receipt delivery.
  * @property returnUrl URL that receives the user after provider checkout.
  */
 @Serializable
@@ -60,6 +61,9 @@ data class CheckoutSessionRequest(
     /** Server-owned price identifier returned by a paywall response. */
     @SerialName("price_id")
     val priceId: String,
+    /** Email address used for checkout receipt delivery. */
+    @SerialName("receipt_email")
+    val receiptEmail: String,
     /** URL that receives the user after provider checkout. */
     @SerialName("return_url")
     val returnUrl: String,

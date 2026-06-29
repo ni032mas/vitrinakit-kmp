@@ -16,7 +16,7 @@ plugins {
 }
 
 group = "ru.vitrina"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 
 enum class VitrinaKitPublication(
     val propertyValue: String,

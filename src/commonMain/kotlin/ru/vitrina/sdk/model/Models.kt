@@ -383,6 +383,19 @@ sealed class VitrinaError {
     ) : VitrinaError()
 
     /**
+     * Checkout validation or state failure.
+     *
+     * @property code Public checkout error code returned by the API.
+     * @property message Error message returned by the SDK or API.
+     */
+    data class Checkout(
+        /** Public checkout error code returned by the API. */
+        val code: VitrinaCheckoutErrorCode,
+        /** Error message returned by the SDK or API. */
+        val message: String,
+    ) : VitrinaError()
+
+    /**
      * SDK or server-side configuration failure.
      *
      * @property message Error message returned by the SDK or API.
@@ -401,6 +414,24 @@ sealed class VitrinaError {
         /** Error message returned by the SDK or API. */
         val message: String,
     ) : VitrinaError()
+}
+
+/**
+ * Public checkout error codes that consumer apps can handle explicitly.
+ */
+@Serializable
+enum class VitrinaCheckoutErrorCode {
+    /** Checkout requires a receipt delivery email address. */
+    @SerialName("receipt_email_required")
+    RECEIPT_EMAIL_REQUIRED,
+
+    /** Receipt email is present but invalid. */
+    @SerialName("invalid_receipt_email")
+    INVALID_RECEIPT_EMAIL,
+
+    /** User already has an active subscription and should not start another checkout. */
+    @SerialName("checkout_active_subscription_exists")
+    ACTIVE_SUBSCRIPTION_EXISTS,
 }
 
 /** VitrinaKit SDK environment alias used by the public facade. */
@@ -476,6 +507,19 @@ sealed class VitrinaKitError {
      * @property message Error message returned by the SDK or API.
      */
     data class Provider(
+        /** Error message returned by the SDK or API. */
+        val message: String,
+    ) : VitrinaKitError()
+
+    /**
+     * Checkout validation or state failure.
+     *
+     * @property code Public checkout error code returned by the API.
+     * @property message Error message returned by the SDK or API.
+     */
+    data class Checkout(
+        /** Public checkout error code returned by the API. */
+        val code: VitrinaCheckoutErrorCode,
         /** Error message returned by the SDK or API. */
         val message: String,
     ) : VitrinaKitError()

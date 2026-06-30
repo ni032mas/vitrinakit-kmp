@@ -21,6 +21,7 @@ import ru.vitrina.sdk.model.EntitlementSource
 import ru.vitrina.sdk.model.SubscriberEntitlementState
 import ru.vitrina.sdk.model.SubscriberState
 import ru.vitrina.sdk.model.SubscriptionStatus
+import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
 import ru.vitrina.sdk.model.VitrinaError
 import ru.vitrina.sdk.model.VitrinaKitError
 import ru.vitrina.sdk.model.VitrinaKitPaywall
@@ -357,6 +358,64 @@ class VitrinaClientTest {
     }
 
     @Test
+    fun checkoutValidationErrorsMapToTypedCheckoutErrors() = runTest {
+        val required = newClient(
+            http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusBadRequest, receiptEmailRequiredJson)),
+        ).createCheckoutSession(
+            CheckoutSessionRequest("user-1", "product-1", "price-1", "", "vitrina://done"),
+        )
+        val invalid = newClient(
+            http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusBadRequest, invalidReceiptEmailJson)),
+        ).createCheckoutSession(
+            CheckoutSessionRequest("user-1", "product-1", "price-1", "bad", "vitrina://done"),
+        )
+        val active = newClient(
+            http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusConflict, activeSubscriptionJson)),
+        ).createCheckoutSession(
+            CheckoutSessionRequest("user-1", "product-1", "price-1", "buyer@example.com", "vitrina://done"),
+        )
+
+        assertEquals(
+            VitrinaCheckoutErrorCode.RECEIPT_EMAIL_REQUIRED,
+            assertIs<VitrinaError.Checkout>(assertIs<VitrinaResult.Failure>(required).error).code,
+        )
+        assertEquals(
+            VitrinaCheckoutErrorCode.INVALID_RECEIPT_EMAIL,
+            assertIs<VitrinaError.Checkout>(assertIs<VitrinaResult.Failure>(invalid).error).code,
+        )
+        assertEquals(
+            VitrinaCheckoutErrorCode.ACTIVE_SUBSCRIPTION_EXISTS,
+            assertIs<VitrinaError.Checkout>(assertIs<VitrinaResult.Failure>(active).error).code,
+        )
+    }
+
+    @Test
+    fun facadePreservesTypedCheckoutErrors() = runTest {
+        val http = FakeHttpClient(
+            response = VitrinaHttpResponse(
+                statusCode = HttpStatusConflict,
+                body = activeSubscriptionJson,
+            ),
+        )
+        VitrinaKit.activate(
+            VitrinaKitConfig.Builder("pk_test")
+                .withAppId("app-1")
+                .withHttpClient(http)
+                .build(),
+        )
+
+        val result = VitrinaKit.makePurchase(
+            product = monthlyProduct(),
+            userId = "user-1",
+            receiptEmail = "buyer@example.com",
+            returnUrl = "vitrina://done",
+        )
+
+        val error = assertIs<VitrinaKitError.Checkout>(assertIs<VitrinaKitResult.Failure>(result).error)
+        assertEquals(VitrinaCheckoutErrorCode.ACTIVE_SUBSCRIPTION_EXISTS, error.code)
+    }
+
+    @Test
     fun invalidConfigurationMapsToTypedError() = runTest {
         val client = VitrinaClient(
             config = VitrinaConfig(
@@ -405,6 +464,7 @@ private fun VitrinaHttpRequest.jsonBodyValue(name: String): String {
 
 private const val HttpStatusOk = 200
 private const val HttpStatusCreated = 201
+private const val HttpStatusBadRequest = 400
 private const val HttpStatusUnauthorized = 401
 private const val HttpStatusNotFound = 404
 private const val HttpStatusConflict = 409
@@ -470,3 +530,6 @@ private val subscriberJson = json.encodeToString(
 )
 
 private const val errorJson = """{"error":"failed"}"""
+private const val receiptEmailRequiredJson = """{"error":"receipt_email_required"}"""
+private const val invalidReceiptEmailJson = """{"error":"invalid_receipt_email"}"""
+private const val activeSubscriptionJson = """{"error":"checkout_active_subscription_exists"}"""

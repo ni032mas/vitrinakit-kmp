@@ -3,12 +3,19 @@ package ru.vitrina.sdk
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import ru.vitrina.sdk.http.VitrinaHttpClient
 import ru.vitrina.sdk.http.VitrinaHttpMethod
 import ru.vitrina.sdk.http.VitrinaHttpRequest
 import ru.vitrina.sdk.model.CheckoutSession
 import ru.vitrina.sdk.model.Paywall
 import ru.vitrina.sdk.model.SubscriberState
+import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
 import ru.vitrina.sdk.model.VitrinaError
 import ru.vitrina.sdk.model.VitrinaResult
 
@@ -209,9 +216,39 @@ class VitrinaClient(
         HttpStatusForbidden,
         -> VitrinaError.Auth(body)
 
-        HttpStatusConflict -> VitrinaError.Provider(body)
+        HttpStatusBadRequest,
+        HttpStatusConflict,
+        -> checkoutErrorCode(body)?.let { code ->
+            VitrinaError.Checkout(
+                code = code,
+                message = checkoutErrorMessage(body = body),
+            )
+        } ?: if (statusCode == HttpStatusConflict) {
+            VitrinaError.Provider(body)
+        } else {
+            VitrinaError.Network(body)
+        }
+
         else -> VitrinaError.Network(body)
     }
+
+    private fun checkoutErrorCode(body: String): VitrinaCheckoutErrorCode? {
+        val parsed = parseErrorBody(body = body) ?: return null
+        val rawCode = parsed[ErrorCodeField]?.jsonPrimitive?.contentOrNull
+            ?: parsed[ErrorField]?.jsonPrimitive?.contentOrNull
+            ?: return null
+        return runCatching {
+            json.decodeFromJsonElement<VitrinaCheckoutErrorCode>(JsonPrimitive(rawCode))
+        }.getOrNull()
+    }
+
+    private fun checkoutErrorMessage(body: String): String {
+        val parsed = parseErrorBody(body = body)
+        return parsed?.get(MessageField)?.jsonPrimitive?.contentOrNull ?: body
+    }
+
+    private fun parseErrorBody(body: String): JsonObject? =
+        runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
 
     private fun subscriberError(statusCode: Int, body: String): VitrinaError = when (statusCode) {
         HttpStatusUnauthorized,
@@ -254,10 +291,14 @@ class VitrinaClient(
 }
 
 private val SuccessStatusRange = 200..299
+private const val HttpStatusBadRequest = 400
 private const val HttpStatusUnauthorized = 401
 private const val HttpStatusForbidden = 403
 private const val HttpStatusNotFound = 404
 private const val HttpStatusConflict = 409
+private const val ErrorField = "error"
+private const val ErrorCodeField = "code"
+private const val MessageField = "message"
 private val LowercaseAsciiRange = 'a'.code..'z'.code
 private val UppercaseAsciiRange = 'A'.code..'Z'.code
 private val DigitAsciiRange = '0'.code..'9'.code

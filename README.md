@@ -9,7 +9,7 @@ repository to its own GitHub Packages Maven registry.
 
 ## Version
 
-Current release candidate: `0.1.0-rc.4`.
+Current release candidate: `0.1.0-rc.6`.
 
 SDK versions are changed only as part of a release task. Do not bump `version`
 in `build.gradle.kts` for normal feature work.
@@ -29,7 +29,7 @@ repositories {
 }
 
 dependencies {
-    implementation("ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.4")
+    implementation("ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.6")
 }
 ```
 
@@ -49,6 +49,8 @@ secret API keys or provider credentials to mobile apps.
 ```kotlin
 import ru.vitrina.sdk.VitrinaKit
 import ru.vitrina.sdk.VitrinaKitConfig
+import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
+import ru.vitrina.sdk.model.VitrinaKitError
 import ru.vitrina.sdk.model.VitrinaKitResult
 
 VitrinaKit.activate(
@@ -81,6 +83,27 @@ val purchaseResult = VitrinaKit.makePurchase(
     receiptEmail = "buyer@example.com",
     returnUrl = "myapp://subscription/return",
 )
+```
+
+`receiptEmail` is required for checkout receipt delivery. The returned
+`confirmationUrl` is the hosted provider checkout URL. If `reused` is `true`,
+the SDK received an existing open checkout session instead of creating a new
+provider payment.
+
+Consumer apps can distinguish public checkout validation and state errors:
+
+```kotlin
+when (val result = purchaseResult) {
+    is VitrinaKitResult.Success -> openHostedCheckout(result.value.confirmationUrl)
+    is VitrinaKitResult.Failure -> when (val error = result.error) {
+        is VitrinaKitError.Checkout -> when (error.code) {
+            VitrinaCheckoutErrorCode.RECEIPT_EMAIL_REQUIRED -> showReceiptEmailRequired()
+            VitrinaCheckoutErrorCode.INVALID_RECEIPT_EMAIL -> showInvalidReceiptEmail()
+            VitrinaCheckoutErrorCode.ACTIVE_SUBSCRIPTION_EXISTS -> refreshProfile()
+        }
+        else -> showCheckoutError()
+    }
+}
 ```
 
 Refresh the subscriber profile after checkout return, app launch, or restore:
@@ -155,11 +178,11 @@ Expected output:
 
 The production dry-run repository should contain the root multiplatform
 publication at
-`build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.4/` and target
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.6/` and target
 publications such as JVM/iOS variants with Kotlin-generated artifact suffixes.
 The development dry-run uses `-PvitrinaKitPublication=development` and writes
 the root publication to
-`build/repository/ru/vitrina/vitrinakit-kmp-sdk-dev/0.1.0-rc.4/`.
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk-dev/0.1.0-rc.6/`.
 
 ## Publish
 

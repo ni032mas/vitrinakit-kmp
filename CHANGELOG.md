@@ -1,5 +1,28 @@
 # VitrinaKit KMP SDK Changelog
 
+## 0.1.0-rc.6
+
+Checkout receipt and open-session reuse release candidate.
+
+### Added
+
+- Checkout requests now require `receiptEmail`, serialized as
+  `receipt_email`, for receipt delivery.
+- Checkout responses expose `reused` so consumer apps can identify an existing
+  open checkout session.
+- Public `VitrinaCheckoutErrorCode` checkout error codes for consumer handling:
+  `receipt_email_required`, `invalid_receipt_email`, and
+  `checkout_active_subscription_exists`.
+- Typed checkout failures through `VitrinaError.Checkout` and
+  `VitrinaKitError.Checkout`.
+
+### Release Channel
+
+- Production coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.6`.
+- Development coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk-dev:0.1.0-rc.6`.
+
 ## 0.1.0-rc.4
 
 Development endpoint correction release candidate.

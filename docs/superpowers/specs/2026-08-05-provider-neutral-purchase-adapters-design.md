@@ -1,5 +1,7 @@
 # VitrinaKit Provider-Neutral Purchase Adapters Design
 
+**Status:** Approved on 2026-08-05
+
 ## Context
 
 The current public facade provides Adapty-style activation, paywall loading, a

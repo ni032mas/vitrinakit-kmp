@@ -1,213 +1,174 @@
-import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.DefaultTask
+import org.gradle.api.tasks.Delete
+import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.TaskAction
-import org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier
-import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 
 plugins {
-    kotlin("multiplatform") version "2.3.20"
-    kotlin("plugin.serialization") version "2.3.20"
-    id("org.jetbrains.dokka") version "2.2.0"
-    `maven-publish`
+    kotlin("multiplatform") version "2.3.20" apply false
+    kotlin("plugin.serialization") version "2.3.20" apply false
+    id("com.android.kotlin.multiplatform.library") version "9.0.1" apply false
+    id("org.jetbrains.dokka") version "2.2.0" apply false
 }
 
 group = "ru.vitrina"
 version = "0.1.0-rc.6"
 
-enum class VitrinaKitPublication(
-    val propertyValue: String,
-    val artifactSuffix: String,
-    val apiBaseUrl: String,
-    val environment: String,
-) {
-    Production(
-        propertyValue = "production",
-        artifactSuffix = "",
-        apiBaseUrl = "https://api.vitrinakit.ru",
-        environment = "PRODUCTION",
-    ),
-    Development(
-        propertyValue = "development",
-        artifactSuffix = "-dev",
-        apiBaseUrl = "https://api.dev.vitrinakit.ru",
-        environment = "SANDBOX",
-    ),
+subprojects {
+    group = rootProject.group
+    version = rootProject.version
 }
 
-val vitrinaKitPublicationName = providers.gradleProperty("vitrinaKitPublication")
-    .orElse(providers.environmentVariable("VITRINAKIT_PUBLICATION"))
-    .orElse(VitrinaKitPublication.Production.propertyValue)
-    .get()
-    .lowercase()
-val vitrinaKitPublication = VitrinaKitPublication.entries.firstOrNull { publication ->
-    publication.propertyValue == vitrinaKitPublicationName
-} ?: error(
-    "Unsupported VitrinaKit publication '$vitrinaKitPublicationName'. " +
-        "Use 'production' or 'development'.",
+private val moduleProjectPaths = setOf(
+    ":vitrinakit-core",
+    ":vitrinakit-googleplay",
+    ":vitrinakit-hosted",
+    ":vitrinakit-rustore",
+)
+private val moduleArtifactIds = setOf(
+    "vitrinakit-kmp-sdk",
+    "vitrinakit-googleplay",
+    "vitrinakit-hosted",
+    "vitrinakit-rustore",
 )
 
-abstract class GenerateVitrinaKitPublicationConfigTask : DefaultTask() {
+abstract class VerifyReleaseArtifactsTask : DefaultTask() {
     @get:Input
-    abstract val apiBaseUrl: Property<String>
+    abstract val expectedArtifactIds: ListProperty<String>
+
+    @get:InputDirectory
+    abstract val repositoryDirectory: DirectoryProperty
 
     @get:Input
-    abstract val environment: Property<String>
+    abstract val coreArtifactId: Property<String>
 
-    @get:OutputDirectory
-    abstract val outputDirectory: DirectoryProperty
+    @get:Input
+    abstract val providerArtifactIds: ListProperty<String>
 
     @TaskAction
-    fun generate() {
-        val outputFile = outputDirectory
-            .file("ru/vitrina/sdk/VitrinaKitPublicationConfig.kt")
-            .get()
-            .asFile
-        outputFile.parentFile.mkdirs()
-        outputFile.writeText(
-            """
-            package ru.vitrina.sdk
-
-            import ru.vitrina.sdk.model.VitrinaEnvironment
-
-            internal const val VitrinaKitApiBaseUrl = "${apiBaseUrl.get()}"
-            internal val VitrinaKitApiEnvironment: VitrinaEnvironment = VitrinaEnvironment.${environment.get()}
-            """.trimIndent() + "\n",
-        )
-    }
-}
-
-val generateVitrinaKitPublicationConfig by tasks.registering(GenerateVitrinaKitPublicationConfigTask::class) {
-    apiBaseUrl.set(vitrinaKitPublication.apiBaseUrl)
-    environment.set(vitrinaKitPublication.environment)
-    outputDirectory.set(
-        layout.buildDirectory.dir(
-            "generated/vitrinakit-publication-config/${vitrinaKitPublication.propertyValue}/commonMain/kotlin",
-        ),
-    )
-}
-
-kotlin {
-    val vitrinaKitXCFramework = XCFramework("VitrinaKit")
-
-    jvm()
-    iosArm64 {
-        binaries.framework {
-            baseName = "VitrinaKit"
-            vitrinaKitXCFramework.add(this)
-        }
-    }
-    iosSimulatorArm64 {
-        binaries.framework {
-            baseName = "VitrinaKit"
-            vitrinaKitXCFramework.add(this)
-        }
-    }
-
-    sourceSets {
-        commonMain {
-            kotlin.srcDir(generateVitrinaKitPublicationConfig)
-        }
-        commonMain.dependencies {
-            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
-            implementation("io.ktor:ktor-client-core:3.3.3")
-        }
-        jvmMain.dependencies {
-            implementation("io.ktor:ktor-client-cio:3.3.3")
-        }
-        iosMain.dependencies {
-            implementation("io.ktor:ktor-client-darwin:3.3.3")
-        }
-        commonTest.dependencies {
-            implementation(kotlin("test"))
-            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
-        }
-    }
-}
-
-publishing {
-    repositories {
-        maven {
-            name = "Build"
-            url = uri(layout.buildDirectory.dir("repository"))
-        }
-        maven {
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/ni032mas/vitrinakit-kmp")
-            credentials {
-                username = providers.gradleProperty("gpr.user")
-                    .orElse(providers.environmentVariable("GITHUB_ACTOR"))
-                    .orNull
-                password = providers.gradleProperty("gpr.key")
-                    .orElse(providers.environmentVariable("GITHUB_TOKEN"))
-                    .orNull
+    fun verify() {
+        val repository = repositoryDirectory.get().asFile
+        expectedArtifactIds.get().forEach { artifactId ->
+            val artifactDirectory = repository.resolve("ru/vitrina/$artifactId")
+            if (!artifactDirectory.isDirectory) {
+                throw GradleException("Missing published artifact directory: $artifactDirectory")
+            }
+            if (artifactDirectory.walkTopDown().none { file -> file.extension == "pom" }) {
+                throw GradleException("Missing POM for published artifact: $artifactId")
             }
         }
-    }
-    publications.withType<MavenPublication>().configureEach {
-        artifactId += vitrinaKitPublication.artifactSuffix
-        pom {
-            name = "VitrinaKit KMP SDK"
-            description = "Kotlin Multiplatform SDK for VitrinaKit mobile subscription integrations"
-            url = "https://github.com/ni032mas/vitrinakit-kmp"
-            licenses {
-                license {
-                    name = "Proprietary"
-                    url = "https://github.com/ni032mas/vitrinakit-kmp"
+
+        val corePomDirectory = repository.resolve("ru/vitrina/${coreArtifactId.get()}")
+        val providerArtifactIds = providerArtifactIds.get()
+        corePomDirectory.walkTopDown()
+            .filter { file -> file.extension == "pom" }
+            .forEach { pomFile ->
+                val pom = pomFile.readText()
+                providerArtifactIds.forEach { providerArtifactId ->
+                    if (pom.contains("<artifactId>$providerArtifactId</artifactId>")) {
+                        throw GradleException(
+                            "Core artifact POM must not depend on provider artifact $providerArtifactId: $pomFile",
+                        )
+                    }
                 }
             }
-            developers {
-                developer {
-                    id = "ni032mas"
-                    name = "VitrinaKit"
-                    url = "https://github.com/ni032mas"
-                }
-            }
-            scm {
-                connection = "scm:git:git://github.com/ni032mas/vitrinakit-kmp.git"
-                developerConnection = "scm:git:ssh://git@github.com:ni032mas/vitrinakit-kmp.git"
-                url = "https://github.com/ni032mas/vitrinakit-kmp"
-            }
-        }
     }
 }
 
-dokka {
-    dokkaPublications.html {
-        moduleName.set("VitrinaKit KMP SDK")
-        moduleVersion.set(project.version.toString())
-        failOnWarning.set(true)
-    }
-    dokkaSourceSets.configureEach {
-        documentedVisibilities.set(setOf(VisibilityModifier.Public))
-        reportUndocumented.set(true)
-        skipEmptyPackages.set(true)
-        suppressGeneratedFiles.set(true)
+tasks.register("verifyModuleTopology") {
+    group = "verification"
+    description = "Verifies the provider-neutral SDK artifact topology."
+
+    doLast {
+        val actualProjectPaths = rootProject.subprojects.map { subproject -> subproject.path }.toSet()
+        val missingProjectPaths = moduleProjectPaths - actualProjectPaths
+        if (missingProjectPaths.isNotEmpty()) {
+            throw GradleException(
+                "Missing SDK artifact projects: ${missingProjectPaths.sorted().joinToString()}",
+            )
+        }
+
+        val publications = rootProject.subprojects.flatMap { subproject ->
+            subproject.extensions.findByType(PublishingExtension::class.java)
+                ?.publications
+                ?.withType(MavenPublication::class.java)
+                ?.map { publication -> publication.artifactId }
+                .orEmpty()
+        }
+        if (publications.size != publications.toSet().size) {
+            throw GradleException("SDK artifact IDs must be unique: ${publications.joinToString()}")
+        }
+
+        val providerProjectPaths = moduleProjectPaths - ":vitrinakit-core"
+        val coreProject = project(":vitrinakit-core")
+        val providerDependencies = coreProject.configurations
+            .flatMap { configuration -> configuration.dependencies }
+            .filterIsInstance<ProjectDependency>()
+            .map { dependency -> dependency.path }
+            .filter { dependencyPath -> dependencyPath in providerProjectPaths }
+        if (providerDependencies.isNotEmpty()) {
+            throw GradleException(
+                "vitrinakit-core must not depend on provider projects: " +
+                    providerDependencies.distinct().sorted().joinToString(),
+            )
+        }
     }
 }
 
 tasks.register("test") {
     group = "verification"
-    description = "Runs the SDK JVM test suite."
-    dependsOn("jvmTest")
+    description = "Runs all SDK unit test targets."
+    dependsOn(
+        ":vitrinakit-core:jvmTest",
+        ":vitrinakit-hosted:jvmTest",
+        ":vitrinakit-googleplay:testAndroidHostTest",
+        ":vitrinakit-rustore:testAndroidHostTest",
+    )
 }
 
 tasks.register("verifySdk") {
     group = "verification"
     description = "Runs SDK tests and generated documentation checks."
-    dependsOn("test", "dokkaGenerate")
+    dependsOn(
+        "test",
+        ":vitrinakit-core:dokkaGenerate",
+        ":vitrinakit-googleplay:dokkaGenerate",
+        ":vitrinakit-hosted:dokkaGenerate",
+        ":vitrinakit-rustore:dokkaGenerate",
+    )
 }
 
-tasks.register("verifyReleaseArtifacts") {
+val prepareReleaseArtifactRepository = tasks.register<Delete>("prepareReleaseArtifactRepository") {
     group = "verification"
-    description = "Builds and publishes SDK release artifacts into the local Maven dry-run repository."
-    dependsOn("verifySdk", "publishAllPublicationsToBuildRepository")
+    description = "Removes stale local Maven artifacts before release verification."
+    delete(layout.buildDirectory.dir("repository"))
 }
 
-tasks.matching { task -> task.name.endsWith("ToGitHubPackagesRepository") }.configureEach {
-    dependsOn("verifySdk")
+tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
+    group = "verification"
+    description = "Publishes all SDK artifacts locally and verifies POM dependency isolation."
+    expectedArtifactIds.set(moduleArtifactIds.sorted())
+    repositoryDirectory.set(layout.buildDirectory.dir("repository"))
+    coreArtifactId.set("vitrinakit-kmp-sdk")
+    providerArtifactIds.set((moduleArtifactIds - "vitrinakit-kmp-sdk").sorted())
+    dependsOn(
+        "verifySdk",
+        prepareReleaseArtifactRepository,
+        ":vitrinakit-core:publishAllPublicationsToBuildRepository",
+        ":vitrinakit-googleplay:publishAllPublicationsToBuildRepository",
+        ":vitrinakit-hosted:publishAllPublicationsToBuildRepository",
+        ":vitrinakit-rustore:publishAllPublicationsToBuildRepository",
+    )
+}
+
+tasks.register("assembleVitrinaKitXCFramework") {
+    group = "build"
+    description = "Builds the VitrinaKit iOS XCFramework from the core SDK."
+    dependsOn(":vitrinakit-core:assembleVitrinaKitXCFramework")
 }

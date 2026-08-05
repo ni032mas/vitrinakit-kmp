@@ -71,6 +71,7 @@ private val requiredArtifactIds = expectedArtifactBaseIds.map { artifactId ->
 private val requiredCoreArtifactIds = coreArtifactIds.map { artifactId ->
     "$artifactId$vitrinaKitPublicationSuffix"
 }.toSet()
+private val requiredProviderArtifactIds = requiredArtifactIds - requiredCoreArtifactIds
 
 abstract class VerifyReleaseArtifactsTask : DefaultTask() {
     @get:Input
@@ -193,11 +194,7 @@ tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
     expectedArtifactIds.set(requiredArtifactIds.sorted())
     repositoryDirectory.set(layout.buildDirectory.dir("repository"))
     coreArtifactIds.set(requiredCoreArtifactIds.sorted())
-    providerArtifactIds.set(
-        (moduleArtifactIds - "vitrinakit-kmp-sdk")
-            .map { artifactId -> "$artifactId$vitrinaKitPublicationSuffix" }
-            .sorted(),
-    )
+    providerArtifactIds.set(requiredProviderArtifactIds.sorted())
     dependsOn(
         "verifySdk",
         prepareReleaseArtifactRepository,
@@ -221,6 +218,9 @@ tasks.register("verifyReleaseArtifactContract") {
             }
             if (releaseTask.coreArtifactIds.get().toSet() != requiredCoreArtifactIds) {
                 add("Release verification must inspect every core platform POM.")
+            }
+            if (releaseTask.providerArtifactIds.get().toSet() != requiredProviderArtifactIds) {
+                add("Release verification must reject every provider root and target artifact ID.")
             }
 
             val generatedConfigPath = "generated/vitrinakit-publication-config/$vitrinaKitPublicationName/commonMain/kotlin/" +

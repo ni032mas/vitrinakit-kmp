@@ -37,6 +37,40 @@ private val moduleArtifactIds = setOf(
     "vitrinakit-hosted",
     "vitrinakit-rustore",
 )
+private val coreArtifactIds = setOf(
+    "vitrinakit-kmp-sdk",
+    "vitrinakit-kmp-sdk-jvm",
+    "vitrinakit-kmp-sdk-iosarm64",
+    "vitrinakit-kmp-sdk-iossimulatorarm64",
+)
+private val expectedArtifactBaseIds = coreArtifactIds + setOf(
+    "vitrinakit-googleplay",
+    "vitrinakit-googleplay-android",
+    "vitrinakit-hosted",
+    "vitrinakit-hosted-android",
+    "vitrinakit-hosted-jvm",
+    "vitrinakit-rustore",
+    "vitrinakit-rustore-android",
+)
+private val vitrinaKitPublicationName = providers.gradleProperty("vitrinaKitPublication")
+    .orElse(providers.environmentVariable("VITRINAKIT_PUBLICATION"))
+    .orElse("production")
+    .get()
+    .lowercase()
+private val vitrinaKitPublicationSuffix = when (vitrinaKitPublicationName) {
+    "production" -> ""
+    "development" -> "-dev"
+    else -> error(
+        "Unsupported VitrinaKit publication '$vitrinaKitPublicationName'. " +
+            "Use 'production' or 'development'.",
+    )
+}
+private val requiredArtifactIds = expectedArtifactBaseIds.map { artifactId ->
+    "$artifactId$vitrinaKitPublicationSuffix"
+}.toSet()
+private val requiredCoreArtifactIds = coreArtifactIds.map { artifactId ->
+    "$artifactId$vitrinaKitPublicationSuffix"
+}.toSet()
 
 abstract class VerifyReleaseArtifactsTask : DefaultTask() {
     @get:Input
@@ -46,7 +80,7 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
     abstract val repositoryDirectory: DirectoryProperty
 
     @get:Input
-    abstract val coreArtifactId: Property<String>
+    abstract val coreArtifactIds: ListProperty<String>
 
     @get:Input
     abstract val providerArtifactIds: ListProperty<String>
@@ -64,20 +98,23 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
             }
         }
 
-        val corePomDirectory = repository.resolve("ru/vitrina/${coreArtifactId.get()}")
         val providerArtifactIds = providerArtifactIds.get()
-        corePomDirectory.walkTopDown()
-            .filter { file -> file.extension == "pom" }
-            .forEach { pomFile ->
-                val pom = pomFile.readText()
-                providerArtifactIds.forEach { providerArtifactId ->
-                    if (pom.contains("<artifactId>$providerArtifactId</artifactId>")) {
-                        throw GradleException(
-                            "Core artifact POM must not depend on provider artifact $providerArtifactId: $pomFile",
-                        )
+        coreArtifactIds.get().forEach { coreArtifactId ->
+            val corePomDirectory = repository.resolve("ru/vitrina/$coreArtifactId")
+            corePomDirectory.walkTopDown()
+                .filter { file -> file.extension == "pom" }
+                .forEach { pomFile ->
+                    val pom = pomFile.readText()
+                    providerArtifactIds.forEach { providerArtifactId ->
+                        if (pom.contains("<artifactId>$providerArtifactId</artifactId>")) {
+                            throw GradleException(
+                                "Core artifact POM must not depend on provider artifact " +
+                                    "$providerArtifactId: $pomFile",
+                            )
+                        }
                     }
                 }
-            }
+        }
     }
 }
 
@@ -153,10 +190,14 @@ val prepareReleaseArtifactRepository = tasks.register<Delete>("prepareReleaseArt
 tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
     group = "verification"
     description = "Publishes all SDK artifacts locally and verifies POM dependency isolation."
-    expectedArtifactIds.set(moduleArtifactIds.sorted())
+    expectedArtifactIds.set(requiredArtifactIds.sorted())
     repositoryDirectory.set(layout.buildDirectory.dir("repository"))
-    coreArtifactId.set("vitrinakit-kmp-sdk")
-    providerArtifactIds.set((moduleArtifactIds - "vitrinakit-kmp-sdk").sorted())
+    coreArtifactIds.set(requiredCoreArtifactIds.sorted())
+    providerArtifactIds.set(
+        (moduleArtifactIds - "vitrinakit-kmp-sdk")
+            .map { artifactId -> "$artifactId$vitrinaKitPublicationSuffix" }
+            .sorted(),
+    )
     dependsOn(
         "verifySdk",
         prepareReleaseArtifactRepository,
@@ -165,6 +206,42 @@ tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
         ":vitrinakit-hosted:publishAllPublicationsToBuildRepository",
         ":vitrinakit-rustore:publishAllPublicationsToBuildRepository",
     )
+}
+
+tasks.register("verifyReleaseArtifactContract") {
+    group = "verification"
+    description = "Verifies the complete release artifact contract."
+    dependsOn("verifyReleaseArtifacts")
+
+    doLast {
+        val releaseTask = tasks.named("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class).get()
+        val violations = buildList {
+            if (releaseTask.expectedArtifactIds.get().toSet() != requiredArtifactIds) {
+                add("Release verification must require every root and target artifact.")
+            }
+            if (releaseTask.coreArtifactIds.get().toSet() != requiredCoreArtifactIds) {
+                add("Release verification must inspect every core platform POM.")
+            }
+
+            val generatedConfigPath = "generated/vitrinakit-publication-config/$vitrinaKitPublicationName/commonMain/kotlin/" +
+                "ru/vitrina/sdk/VitrinaKitPublicationConfig.kt"
+            val providerProjects = rootProject.subprojects.filter { project ->
+                project.path != ":vitrinakit-core"
+            }
+            val duplicateConfigProjects = providerProjects.filter { project ->
+                project.layout.buildDirectory.file(generatedConfigPath).get().asFile.isFile
+            }
+            if (duplicateConfigProjects.isNotEmpty()) {
+                add(
+                    "Generated publication config must only be compiled by core: " +
+                        duplicateConfigProjects.joinToString { project -> project.path },
+                )
+            }
+        }
+        if (violations.isNotEmpty()) {
+            throw GradleException(violations.joinToString(separator = "\n"))
+        }
+    }
 }
 
 tasks.register("assembleVitrinaKitXCFramework") {

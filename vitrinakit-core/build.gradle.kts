@@ -1,5 +1,4 @@
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
-import org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier
 
 plugins {
     kotlin("multiplatform")
@@ -9,6 +8,7 @@ plugins {
 }
 
 extra["vitrinaKitArtifactId"] = "vitrinakit-kmp-sdk"
+extra["vitrinaKitGeneratesPublicationConfig"] = "true"
 apply(from = rootProject.file("gradle/publishing-conventions.gradle.kts"))
 
 kotlin {
@@ -47,19 +47,5 @@ kotlin {
             implementation(kotlin("test"))
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
         }
-    }
-}
-
-dokka {
-    dokkaPublications.html {
-        moduleName.set("VitrinaKit KMP SDK")
-        moduleVersion.set(project.version.toString())
-        failOnWarning.set(true)
-    }
-    dokkaSourceSets.configureEach {
-        documentedVisibilities.set(setOf(VisibilityModifier.Public))
-        reportUndocumented.set(true)
-        skipEmptyPackages.set(true)
-        suppressGeneratedFiles.set(true)
     }
 }

@@ -1,3 +1,5 @@
+@file:OptIn(ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapterApi::class)
+
 package ru.vitrina.sdk
 
 import kotlinx.serialization.SerialName
@@ -18,6 +20,21 @@ import ru.vitrina.sdk.model.SubscriberState
 import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
 import ru.vitrina.sdk.model.VitrinaError
 import ru.vitrina.sdk.model.VitrinaResult
+import ru.vitrina.sdk.purchase.PurchaseApi
+import ru.vitrina.sdk.purchase.PurchaseApiResult
+import ru.vitrina.sdk.purchase.PurchaseAttempt
+import ru.vitrina.sdk.purchase.PurchaseConfirmation
+import ru.vitrina.sdk.purchase.PurchaseRestoreResponse
+import ru.vitrina.sdk.purchase.SubscriberScope
+import ru.vitrina.sdk.purchase.VitrinaKitProviderProof
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapterApi
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAttemptStatus
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseCapability
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseError
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseErrorCode
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseInstruction
+import ru.vitrina.sdk.purchase.VitrinaKitRestorablePurchase
+import ru.vitrina.sdk.purchase.VitrinaKitRestoredPurchase
 
 /**
  * Configuration required to access the VitrinaKit public SDK API.
@@ -81,6 +98,7 @@ data class CheckoutSessionRequest(
  *
  * The client only uses publishable SDK keys and must never receive backend secret keys or provider credentials.
  */
+@OptIn(VitrinaKitPurchaseAdapterApi::class)
 class VitrinaClient(
     private val config: VitrinaConfig,
     private val httpClient: VitrinaHttpClient,
@@ -90,10 +108,49 @@ class VitrinaClient(
         encodeDefaults = false
     }
     private val fallbackPaywalls = mutableMapOf<String, Paywall>()
+    private val purchaseAttempts = mutableMapOf<String, PurchaseAttempt>()
+
+    internal suspend fun exchangeSubscriberSession(trustedToken: String): VitrinaResult<SubscriberSession> = request(
+        method = VitrinaHttpMethod.POST,
+        path = "/api/v1/subscriber-sessions",
+        body = json.encodeToString(SubscriberSessionExchangeRequest(token = trustedToken)),
+        decode = { payload -> json.decodeFromString<SubscriberSession>(payload) },
+        errorMapper = ::identityError,
+    )
+
+    internal suspend fun fetchPaywall(
+        placementKey: String,
+        externalUserId: String?,
+        subscriberSession: String?,
+    ): VitrinaResult<Paywall> = request(
+        method = VitrinaHttpMethod.GET,
+        path = identityPaywallPath(placementKey = placementKey, externalUserId = externalUserId),
+        body = null,
+        additionalHeaders = subscriberSessionHeaders(sessionToken = subscriberSession),
+        decode = { payload -> decodePaywall(payload = payload) },
+        errorMapper = ::paywallError,
+    )
+
+    internal suspend fun refreshSubscriber(
+        externalUserId: String?,
+        subscriberSession: String?,
+    ): VitrinaResult<SubscriberState> = request(
+        method = VitrinaHttpMethod.GET,
+        path = externalUserId?.let { "/api/v1/subscriber/${encodePathSegment(it)}" }
+            ?: "/api/v1/subscriber/me",
+        body = null,
+        additionalHeaders = subscriberSessionHeaders(sessionToken = subscriberSession),
+        decode = { payload -> json.decodeFromString<SubscriberState>(payload) },
+        errorMapper = ::subscriberError,
+    )
 
     /**
      * Fetches a paywall placement and its server-owned product and price options.
      */
+    @Deprecated(
+        message = "Use the identity-bound VitrinaKit facade: identify(identity), then getPaywall(placementId).",
+        replaceWith = ReplaceWith("VitrinaKit.getPaywall(placementKey)"),
+    )
     suspend fun fetchPaywall(
         placementKey: String,
         userContext: UserContext,
@@ -101,13 +158,17 @@ class VitrinaClient(
         method = VitrinaHttpMethod.GET,
         path = paywallPath(placementKey = placementKey, userContext = userContext),
         body = null,
-        decode = { payload -> json.decodeFromString<Paywall>(payload) },
+        decode = { payload -> decodePaywall(payload = payload) },
         errorMapper = ::paywallError,
     )
 
     /**
      * Creates a hosted checkout session for a product and price returned by a paywall response.
      */
+    @Deprecated(
+        message = "Use the identity-bound VitrinaKit facade and a configured hosted adapter.",
+        replaceWith = ReplaceWith("VitrinaKit.purchase(product)"),
+    )
     suspend fun createCheckoutSession(request: CheckoutSessionRequest): VitrinaResult<CheckoutSession> = request(
         method = VitrinaHttpMethod.POST,
         path = "/api/v1/checkout/sessions",
@@ -119,12 +180,115 @@ class VitrinaClient(
     /**
      * Refreshes the current subscription and entitlement state for an external user.
      */
+    @Deprecated(
+        message = "Use the identity-bound VitrinaKit facade: identify(identity), then getProfile().",
+        replaceWith = ReplaceWith("VitrinaKit.getProfile()"),
+    )
     suspend fun refreshSubscriber(externalUserId: String): VitrinaResult<SubscriberState> = request(
         method = VitrinaHttpMethod.GET,
         path = "/api/v1/subscriber/${encodePathSegment(externalUserId)}",
         body = null,
         decode = { payload -> json.decodeFromString<SubscriberState>(payload) },
         errorMapper = ::subscriberError,
+    )
+
+    internal suspend fun startPurchase(
+        scope: SubscriberScope,
+        placementId: String,
+        productReference: String,
+        capability: VitrinaKitPurchaseCapability,
+        idempotencyKey: String,
+    ): PurchaseApiResult<PurchaseAttempt> {
+        val result = purchaseRequest(
+            method = VitrinaHttpMethod.POST,
+            path = "/api/v1/purchase-attempts",
+            body = json.encodeToString(
+                StartPurchaseRequest(
+                    placementId = placementId,
+                    productReference = productReference,
+                    capability = capability,
+                ),
+            ),
+            headers = subscriberSessionHeaders(scope.sessionToken) + (IdempotencyHeader to idempotencyKey),
+            expectedStatus = HttpStatusCreated,
+            decode = { payload -> json.decodeFromString<PurchaseAttemptResponse>(payload).toDomain() },
+        )
+        if (result is PurchaseApiResult.Success) {
+            purchaseAttempts[result.value.reference] = result.value
+        }
+        return result
+    }
+
+    internal suspend fun confirmPurchase(
+        scope: SubscriberScope,
+        attemptReference: String,
+        idempotencyKey: String,
+        proof: VitrinaKitProviderProof,
+    ): PurchaseApiResult<PurchaseConfirmation> {
+        val result = purchaseRequest(
+            method = VitrinaHttpMethod.POST,
+            path = "/api/v1/purchase-attempts/${encodePathSegment(attemptReference)}/confirm",
+            body = json.encodeToString(ConfirmPurchaseRequest(proof = proof.value)),
+            headers = subscriberSessionHeaders(scope.sessionToken) + (IdempotencyHeader to idempotencyKey),
+            expectedStatus = HttpStatusOk,
+            decode = { payload -> json.decodeFromString<PurchaseConfirmationResponse>(payload).toDomain() },
+        )
+        if (result is PurchaseApiResult.Failure && result.error.code == VitrinaKitPurchaseErrorCode.PURCHASE_PENDING) {
+            val pendingAttempt = purchaseAttempts[attemptReference]?.copy(
+                status = VitrinaKitPurchaseAttemptStatus.PENDING,
+            ) ?: return result
+            return PurchaseApiResult.Success(
+                PurchaseConfirmation(attempt = pendingAttempt, pending = true, profile = null),
+            )
+        }
+        return result
+    }
+
+    internal suspend fun getPurchase(
+        scope: SubscriberScope,
+        attemptReference: String,
+    ): PurchaseApiResult<PurchaseAttempt> = purchaseRequest(
+        method = VitrinaHttpMethod.GET,
+        path = "/api/v1/purchase-attempts/${encodePathSegment(attemptReference)}",
+        body = null,
+        headers = subscriberSessionHeaders(scope.sessionToken),
+        expectedStatus = HttpStatusOk,
+        decode = { payload -> json.decodeFromString<PurchaseAttemptResponse>(payload).toDomain() },
+    )
+
+    internal suspend fun restorePurchases(
+        scope: SubscriberScope,
+        purchases: List<VitrinaKitRestorablePurchase>,
+        capability: VitrinaKitPurchaseCapability,
+    ): PurchaseApiResult<PurchaseRestoreResponse> = purchaseRequest(
+        method = VitrinaHttpMethod.POST,
+        path = "/api/v1/purchases/restore",
+        body = json.encodeToString(
+            RestorePurchaseRequest(
+                purchases = purchases.map { purchase ->
+                    RestorePurchaseProofRequest(
+                        placementId = purchase.placementId,
+                        productReference = purchase.productReference,
+                        capability = capability,
+                        proof = purchase.proof.value,
+                    )
+                },
+            ),
+        ),
+        headers = subscriberSessionHeaders(scope.sessionToken),
+        expectedStatus = HttpStatusOk,
+        decode = { payload -> json.decodeFromString<PurchaseRestoreResponseWire>(payload).toDomain() },
+    )
+
+    internal suspend fun refreshPurchaseProfile(
+        scope: SubscriberScope,
+    ): PurchaseApiResult<SubscriberState> = purchaseRequest(
+        method = VitrinaHttpMethod.GET,
+        path = "/api/v1/subscriber/me",
+        body = null,
+        headers = subscriberSessionHeaders(scope.sessionToken),
+        expectedStatus = HttpStatusOk,
+        decode = { payload -> json.decodeFromString<SubscriberState>(payload) },
     )
 
     /**
@@ -143,6 +307,7 @@ class VitrinaClient(
         method: VitrinaHttpMethod,
         path: String,
         body: String?,
+        additionalHeaders: Map<String, String> = emptyMap(),
         decode: (String) -> T,
         errorMapper: (Int, String) -> VitrinaError,
     ): VitrinaResult<T> {
@@ -157,13 +322,13 @@ class VitrinaClient(
                     method = method,
                     url = config.baseUrl.trimEnd('/') + path,
                     path = path,
-                    headers = authHeaders(),
+                    headers = authHeaders() + additionalHeaders,
                     body = body,
                 ),
             )
         }.getOrElse { error ->
             return VitrinaResult.Failure(
-                VitrinaError.Network(error.message ?: "Network request failed."),
+                VitrinaError.Network("Network request failed."),
             )
         }
 
@@ -173,7 +338,62 @@ class VitrinaClient(
 
         return runCatching { VitrinaResult.Success(decode(response.body)) }
             .getOrElse { error ->
-                VitrinaResult.Failure(VitrinaError.Network(error.message ?: "Response decoding failed."))
+                VitrinaResult.Failure(VitrinaError.Network("Response decoding failed."))
+            }
+    }
+
+    private suspend fun <T> purchaseRequest(
+        method: VitrinaHttpMethod,
+        path: String,
+        body: String?,
+        headers: Map<String, String>,
+        expectedStatus: Int,
+        decode: (String) -> T,
+    ): PurchaseApiResult<T> {
+        val configurationError = validateConfig()
+        if (configurationError != null) {
+            return PurchaseApiResult.Failure(
+                VitrinaKitPurchaseError(
+                    code = VitrinaKitPurchaseErrorCode.NOT_ACTIVATED,
+                    message = configurationError.message,
+                    retryable = false,
+                    supportReference = null,
+                ),
+            )
+        }
+        val response = runCatching {
+            httpClient.send(
+                VitrinaHttpRequest(
+                    method = method,
+                    url = config.baseUrl.trimEnd('/') + path,
+                    path = path,
+                    headers = authHeaders() + headers,
+                    body = body,
+                ),
+            )
+        }.getOrElse {
+            return PurchaseApiResult.Failure(
+                VitrinaKitPurchaseError(
+                    code = VitrinaKitPurchaseErrorCode.NETWORK_ERROR,
+                    message = "Network request failed.",
+                    retryable = true,
+                    supportReference = null,
+                ),
+            )
+        }
+        if (response.statusCode != expectedStatus) {
+            return PurchaseApiResult.Failure(purchaseError(body = response.body, statusCode = response.statusCode))
+        }
+        return runCatching { PurchaseApiResult.Success(decode(response.body)) }
+            .getOrElse {
+                PurchaseApiResult.Failure(
+                    VitrinaKitPurchaseError(
+                        code = VitrinaKitPurchaseErrorCode.SERVER_VALIDATION_FAILED,
+                        message = "The server response could not be decoded.",
+                        retryable = false,
+                        supportReference = null,
+                    ),
+                )
             }
     }
 
@@ -189,6 +409,18 @@ class VitrinaClient(
             put("X-Vitrina-App-Id", appId)
         }
         put("X-Vitrina-Environment", config.environment.name)
+    }
+
+    private fun subscriberSessionHeaders(sessionToken: String?): Map<String, String> =
+        sessionToken?.takeIf { it.isNotBlank() }?.let { mapOf(SubscriberSessionHeader to it) }.orEmpty()
+
+    private fun identityPaywallPath(placementKey: String, externalUserId: String?): String {
+        val path = "/api/v1/paywall/${encodePathSegment(normalizePlacementKey(placementKey))}"
+        return externalUserId?.let { "$path?external_user_id=${encodeQueryValue(it)}" } ?: path
+    }
+
+    private fun decodePaywall(payload: String): Paywall {
+        return json.decodeFromString<Paywall>(payload)
     }
 
     private fun paywallPath(placementKey: String, userContext: UserContext): String {
@@ -259,6 +491,42 @@ class VitrinaClient(
         else -> VitrinaError.Network(body)
     }
 
+    private fun identityError(statusCode: Int, body: String): VitrinaError = when (statusCode) {
+        HttpStatusBadRequest,
+        HttpStatusUnauthorized,
+        HttpStatusForbidden,
+        HttpStatusConflict,
+        -> VitrinaError.Auth(problemDetail(body = body))
+
+        else -> VitrinaError.Network(problemDetail(body = body))
+    }
+
+    private fun purchaseError(body: String, statusCode: Int): VitrinaKitPurchaseError {
+        val problem = runCatching { json.decodeFromString<ProblemDetailsWire>(body) }.getOrNull()
+        val code = problem?.code?.let(::decodePurchaseErrorCode) ?: VitrinaKitPurchaseErrorCode.UNKNOWN
+        return VitrinaKitPurchaseError(
+            code = code,
+            message = problem?.detail?.takeIf { it.isNotBlank() } ?: "The purchase request failed.",
+            retryable = problemRetryable(problem = problem, statusCode = statusCode),
+            supportReference = problem?.requestId?.takeIf { it.isNotBlank() },
+        )
+    }
+
+    private fun problemRetryable(problem: ProblemDetailsWire?, statusCode: Int): Boolean {
+        val metadataRetryable = runCatching {
+            problem?.meta?.get(RetryableField)?.jsonPrimitive?.contentOrNull == TrueValue
+        }.getOrDefault(false)
+        return metadataRetryable || statusCode >= HttpStatusServerError
+    }
+
+    private fun decodePurchaseErrorCode(rawCode: String): VitrinaKitPurchaseErrorCode = runCatching {
+        json.decodeFromJsonElement<VitrinaKitPurchaseErrorCode>(JsonPrimitive(rawCode))
+    }.getOrDefault(VitrinaKitPurchaseErrorCode.UNKNOWN)
+
+    private fun problemDetail(body: String): String = runCatching {
+        json.decodeFromString<ProblemDetailsWire>(body).detail
+    }.getOrDefault("The request failed.")
+
     private fun normalizePlacementKey(value: String): String = value.trim().lowercase()
 
     private fun encodePathSegment(value: String): String = encodeQueryValue(value)
@@ -290,12 +558,66 @@ class VitrinaClient(
     }
 }
 
+internal class VitrinaClientPurchaseApi(
+    private val client: VitrinaClient,
+) : PurchaseApi {
+    override suspend fun startPurchase(
+        scope: SubscriberScope,
+        placementId: String,
+        productReference: String,
+        capability: VitrinaKitPurchaseCapability,
+        idempotencyKey: String,
+    ): PurchaseApiResult<PurchaseAttempt> = client.startPurchase(
+        scope = scope,
+        placementId = placementId,
+        productReference = productReference,
+        capability = capability,
+        idempotencyKey = idempotencyKey,
+    )
+
+    override suspend fun confirmPurchase(
+        scope: SubscriberScope,
+        attemptReference: String,
+        idempotencyKey: String,
+        proof: VitrinaKitProviderProof,
+    ): PurchaseApiResult<PurchaseConfirmation> = client.confirmPurchase(
+        scope = scope,
+        attemptReference = attemptReference,
+        idempotencyKey = idempotencyKey,
+        proof = proof,
+    )
+
+    override suspend fun getPurchase(
+        scope: SubscriberScope,
+        attemptReference: String,
+    ): PurchaseApiResult<PurchaseAttempt> = client.getPurchase(
+        scope = scope,
+        attemptReference = attemptReference,
+    )
+
+    override suspend fun restorePurchases(
+        scope: SubscriberScope,
+        purchases: List<VitrinaKitRestorablePurchase>,
+        capability: VitrinaKitPurchaseCapability,
+    ): PurchaseApiResult<PurchaseRestoreResponse> = client.restorePurchases(
+        scope = scope,
+        purchases = purchases,
+        capability = capability,
+    )
+
+    override suspend fun refreshProfile(scope: SubscriberScope): PurchaseApiResult<SubscriberState> =
+        client.refreshPurchaseProfile(scope = scope)
+}
+
 private val SuccessStatusRange = 200..299
 private const val HttpStatusBadRequest = 400
+private const val HttpStatusOk = 200
+private const val HttpStatusCreated = 201
 private const val HttpStatusUnauthorized = 401
 private const val HttpStatusForbidden = 403
 private const val HttpStatusNotFound = 404
 private const val HttpStatusConflict = 409
+private const val HttpStatusServerError = 500
 private const val ErrorField = "error"
 private const val ErrorCodeField = "code"
 private const val MessageField = "message"
@@ -308,3 +630,148 @@ private const val DotAscii = 46
 private const val ByteMask = 0xFF
 private const val HexRadix = 16
 private const val HexWidth = 2
+private const val SubscriberSessionHeader = "Vitrina-Subscriber-Session"
+private const val IdempotencyHeader = "Idempotency-Key"
+private const val RetryableField = "retryable"
+private const val TrueValue = "true"
+
+@Serializable
+internal data class SubscriberSessionExchangeRequest(val token: String) {
+    override fun toString(): String = "SubscriberSessionExchangeRequest(token=<redacted>)"
+}
+
+@Serializable
+internal data class SubscriberSession(
+    @SerialName("session_token")
+    val sessionToken: String,
+    @SerialName("subscriber_id")
+    val subscriberId: String,
+    @SerialName("external_user_id")
+    val externalUserId: String,
+    @SerialName("expires_at")
+    val expiresAt: String,
+) {
+    override fun toString(): String =
+        "SubscriberSession(sessionToken=<redacted>, subscriberId=$subscriberId, " +
+            "externalUserId=$externalUserId, expiresAt=$expiresAt)"
+}
+
+@Serializable
+private data class StartPurchaseRequest(
+    @SerialName("placement_key")
+    val placementId: String,
+    @SerialName("product_reference")
+    val productReference: String,
+    val capability: VitrinaKitPurchaseCapability,
+)
+
+@Serializable
+private data class ConfirmPurchaseRequest(val proof: String) {
+    override fun toString(): String = "ConfirmPurchaseRequest(proof=<redacted>)"
+}
+
+@Serializable
+private data class PurchasePresentationResponse(
+    @SerialName("product_id")
+    val productId: String,
+    @SerialName("price_id")
+    val priceId: String? = null,
+    @SerialName("package_name")
+    val packageName: String,
+    @SerialName("account_binding")
+    val accountBinding: String,
+)
+
+@Serializable
+private data class PurchaseAttemptResponse(
+    val reference: String,
+    val status: VitrinaKitPurchaseAttemptStatus,
+    val reason: String? = null,
+    @SerialName("expires_at")
+    val expiresAt: String,
+    val capability: VitrinaKitPurchaseCapability,
+    val presentation: PurchasePresentationResponse,
+)
+
+private fun PurchaseAttemptResponse.toDomain(): PurchaseAttempt = PurchaseAttempt(
+    reference = reference,
+    status = status,
+    reason = reason,
+    expiresAt = expiresAt,
+    capability = capability,
+    instruction = VitrinaKitPurchaseInstruction(
+        attemptReference = reference,
+        productId = presentation.productId,
+        priceId = presentation.priceId,
+        packageName = presentation.packageName,
+        accountBinding = presentation.accountBinding,
+        expiresAt = expiresAt,
+    ),
+)
+
+@Serializable
+private data class PurchaseConfirmationResponse(
+    val attempt: PurchaseAttemptResponse,
+    val pending: Boolean,
+    val profile: SubscriberState,
+)
+
+private fun PurchaseConfirmationResponse.toDomain(): PurchaseConfirmation = PurchaseConfirmation(
+    attempt = attempt.toDomain(),
+    pending = pending,
+    profile = profile,
+)
+
+@Serializable
+private data class RestorePurchaseRequest(val purchases: List<RestorePurchaseProofRequest>)
+
+@Serializable
+private data class RestorePurchaseProofRequest(
+    @SerialName("placement_key")
+    val placementId: String,
+    @SerialName("product_reference")
+    val productReference: String,
+    val capability: VitrinaKitPurchaseCapability,
+    val proof: String,
+) {
+    override fun toString(): String =
+        "RestorePurchaseProofRequest(placementId=$placementId, productReference=$productReference, " +
+            "capability=$capability, proof=<redacted>)"
+}
+
+@Serializable
+private data class RestoredPurchaseWire(
+    val reference: String,
+    val status: VitrinaKitPurchaseAttemptStatus,
+    val replayed: Boolean,
+)
+
+@Serializable
+private data class PurchaseRestoreResponseWire(
+    val purchases: List<RestoredPurchaseWire>,
+    val profile: SubscriberState,
+)
+
+private fun PurchaseRestoreResponseWire.toDomain(): PurchaseRestoreResponse = PurchaseRestoreResponse(
+    purchases = purchases.map { purchase ->
+        VitrinaKitRestoredPurchase(
+            purchaseReference = purchase.reference,
+            status = purchase.status,
+            replayed = purchase.replayed,
+        )
+    },
+    profile = profile,
+)
+
+@Serializable
+private data class ProblemDetailsWire(
+    val type: String,
+    val title: String,
+    val status: Int,
+    val detail: String,
+    val instance: String,
+    val code: String,
+    @SerialName("request_id")
+    val requestId: String,
+    val meta: JsonObject? = null,
+)

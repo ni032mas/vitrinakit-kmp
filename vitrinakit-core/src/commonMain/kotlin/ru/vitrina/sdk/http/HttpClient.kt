@@ -30,7 +30,11 @@ data class VitrinaHttpRequest(
     val headers: Map<String, String>,
     /** Optional JSON request body. */
     val body: String?,
-)
+) {
+    /** Returns request metadata while always redacting the request body and header values. */
+    override fun toString(): String =
+        "VitrinaHttpRequest(method=$method, url=$url, path=$path, headers=${headers.keys}, body=<redacted>)"
+}
 
 /**
  * Platform-neutral HTTP response returned by a host-provided transport.
@@ -43,7 +47,10 @@ data class VitrinaHttpResponse(
     val statusCode: Int,
     /** Raw response body. */
     val body: String,
-)
+) {
+    /** Returns response metadata while always redacting the response body. */
+    override fun toString(): String = "VitrinaHttpResponse(statusCode=$statusCode, body=<redacted>)"
+}
 
 /**
  * Host-provided HTTP transport used by [ru.vitrina.sdk.VitrinaClient].

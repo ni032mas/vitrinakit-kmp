@@ -2,6 +2,9 @@
 
 package ru.vitrina.sdk
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -108,7 +111,19 @@ class VitrinaClient(
         encodeDefaults = false
     }
     private val fallbackPaywalls = mutableMapOf<String, Paywall>()
-    private val purchaseAttempts = mutableMapOf<String, PurchaseAttempt>()
+    private val purchaseAttemptIndex = MutableStateFlow(PurchaseAttemptIndex())
+
+    internal val trackedPurchaseAttemptCount: Int
+        get() = purchaseAttemptIndex.value.attempts.size
+
+    internal val purchaseAttemptGeneration: Long
+        get() = purchaseAttemptIndex.value.generation
+
+    internal fun clearPurchaseAttempts() {
+        purchaseAttemptIndex.update { current ->
+            PurchaseAttemptIndex(generation = current.generation + 1)
+        }
+    }
 
     internal suspend fun exchangeSubscriberSession(trustedToken: String): VitrinaResult<SubscriberSession> = request(
         method = VitrinaHttpMethod.POST,
@@ -214,7 +229,7 @@ class VitrinaClient(
             decode = { payload -> json.decodeFromString<PurchaseAttemptResponse>(payload).toDomain() },
         )
         if (result is PurchaseApiResult.Success) {
-            purchaseAttempts[result.value.reference] = result.value
+            trackPurchaseAttempt(attempt = result.value, generation = scope.purchaseAttemptGeneration)
         }
         return result
     }
@@ -234,12 +249,21 @@ class VitrinaClient(
             decode = { payload -> json.decodeFromString<PurchaseConfirmationResponse>(payload).toDomain() },
         )
         if (result is PurchaseApiResult.Failure && result.error.code == VitrinaKitPurchaseErrorCode.PURCHASE_PENDING) {
-            val pendingAttempt = purchaseAttempts[attemptReference]?.copy(
+            val pendingAttempt = purchaseAttempt(
+                reference = attemptReference,
+                generation = scope.purchaseAttemptGeneration,
+            )?.copy(
                 status = VitrinaKitPurchaseAttemptStatus.PENDING,
             ) ?: return result
+            trackPurchaseAttempt(attempt = pendingAttempt, generation = scope.purchaseAttemptGeneration)
             return PurchaseApiResult.Success(
                 PurchaseConfirmation(attempt = pendingAttempt, pending = true, profile = null),
             )
+        }
+        if (result is PurchaseApiResult.Success) {
+            trackPurchaseAttempt(attempt = result.value.attempt, generation = scope.purchaseAttemptGeneration)
+        } else if (result is PurchaseApiResult.Failure && !result.error.isRecoverableConfirmationFailure()) {
+            removePurchaseAttempt(reference = attemptReference, generation = scope.purchaseAttemptGeneration)
         }
         return result
     }
@@ -247,14 +271,20 @@ class VitrinaClient(
     internal suspend fun getPurchase(
         scope: SubscriberScope,
         attemptReference: String,
-    ): PurchaseApiResult<PurchaseAttempt> = purchaseRequest(
-        method = VitrinaHttpMethod.GET,
-        path = "/api/v1/purchase-attempts/${encodePathSegment(attemptReference)}",
-        body = null,
-        headers = subscriberSessionHeaders(scope.sessionToken),
-        expectedStatus = HttpStatusOk,
-        decode = { payload -> json.decodeFromString<PurchaseAttemptResponse>(payload).toDomain() },
-    )
+    ): PurchaseApiResult<PurchaseAttempt> {
+        val result = purchaseRequest(
+            method = VitrinaHttpMethod.GET,
+            path = "/api/v1/purchase-attempts/${encodePathSegment(attemptReference)}",
+            body = null,
+            headers = subscriberSessionHeaders(scope.sessionToken),
+            expectedStatus = HttpStatusOk,
+            decode = { payload -> json.decodeFromString<PurchaseAttemptResponse>(payload).toDomain() },
+        )
+        if (result is PurchaseApiResult.Success) {
+            trackPurchaseAttempt(attempt = result.value, generation = scope.purchaseAttemptGeneration)
+        }
+        return result
+    }
 
     internal suspend fun restorePurchases(
         scope: SubscriberScope,
@@ -327,6 +357,9 @@ class VitrinaClient(
                 ),
             )
         }.getOrElse { error ->
+            if (error is CancellationException) {
+                throw error
+            }
             return VitrinaResult.Failure(
                 VitrinaError.Network("Network request failed."),
             )
@@ -371,7 +404,10 @@ class VitrinaClient(
                     body = body,
                 ),
             )
-        }.getOrElse {
+        }.getOrElse { error ->
+            if (error is CancellationException) {
+                throw error
+            }
             return PurchaseApiResult.Failure(
                 VitrinaKitPurchaseError(
                     code = VitrinaKitPurchaseErrorCode.NETWORK_ERROR,
@@ -400,6 +436,33 @@ class VitrinaClient(
     private fun validateConfig(): VitrinaError.Configuration? = when {
         config.publishableKey.isBlank() -> VitrinaError.Configuration("publishableKey is required.")
         else -> null
+    }
+
+    private fun purchaseAttempt(reference: String, generation: Long): PurchaseAttempt? {
+        val current = purchaseAttemptIndex.value
+        return current.attempts[reference].takeIf { current.generation == generation }
+    }
+
+    private fun removePurchaseAttempt(reference: String, generation: Long) {
+        purchaseAttemptIndex.update { current ->
+            if (current.generation != generation) {
+                current
+            } else {
+                current.copy(attempts = current.attempts - reference)
+            }
+        }
+    }
+
+    private fun trackPurchaseAttempt(attempt: PurchaseAttempt, generation: Long) {
+        purchaseAttemptIndex.update { current ->
+            if (current.generation != generation) {
+                current
+            } else if (attempt.status.isTerminalPurchaseStatus()) {
+                current.copy(attempts = current.attempts - attempt.reference)
+            } else {
+                current.copy(attempts = current.attempts + (attempt.reference to attempt))
+            }
+        }
     }
 
     private fun authHeaders(): Map<String, String> = buildMap {
@@ -634,6 +697,31 @@ private const val SubscriberSessionHeader = "Vitrina-Subscriber-Session"
 private const val IdempotencyHeader = "Idempotency-Key"
 private const val RetryableField = "retryable"
 private const val TrueValue = "true"
+
+private data class PurchaseAttemptIndex(
+    val generation: Long = 0,
+    val attempts: Map<String, PurchaseAttempt> = emptyMap(),
+)
+
+private fun VitrinaKitPurchaseError.isRecoverableConfirmationFailure(): Boolean =
+    code == VitrinaKitPurchaseErrorCode.NETWORK_ERROR ||
+        code == VitrinaKitPurchaseErrorCode.PROVIDER_VALIDATION_UNAVAILABLE
+
+private fun VitrinaKitPurchaseAttemptStatus.isTerminalPurchaseStatus(): Boolean = when (this) {
+    VitrinaKitPurchaseAttemptStatus.SUCCEEDED,
+    VitrinaKitPurchaseAttemptStatus.CANCELLED,
+    VitrinaKitPurchaseAttemptStatus.FAILED,
+    VitrinaKitPurchaseAttemptStatus.DUPLICATE_COVERAGE,
+    -> true
+
+    VitrinaKitPurchaseAttemptStatus.CREATED,
+    VitrinaKitPurchaseAttemptStatus.PROVIDER_READY,
+    VitrinaKitPurchaseAttemptStatus.PRESENTED,
+    VitrinaKitPurchaseAttemptStatus.PROOF_RECEIVED,
+    VitrinaKitPurchaseAttemptStatus.VALIDATING,
+    VitrinaKitPurchaseAttemptStatus.PENDING,
+    -> false
+}
 
 @Serializable
 internal data class SubscriberSessionExchangeRequest(val token: String) {

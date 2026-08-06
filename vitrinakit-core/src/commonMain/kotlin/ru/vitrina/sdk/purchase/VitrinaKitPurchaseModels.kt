@@ -285,6 +285,7 @@ internal data class PurchaseRestoreResponse(
 internal data class SubscriberScope(
     val cacheKey: ru.vitrina.sdk.cache.SubscriberCacheKey,
     val sessionToken: String,
+    val purchaseAttemptGeneration: Long = 0,
 ) {
     override fun toString(): String = "SubscriberScope(cacheKey=$cacheKey, sessionToken=<redacted>)"
 }

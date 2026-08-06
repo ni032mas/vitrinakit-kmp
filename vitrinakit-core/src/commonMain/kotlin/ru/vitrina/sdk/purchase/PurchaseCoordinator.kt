@@ -68,6 +68,7 @@ internal class PurchaseCoordinator(
         scope: SubscriberScope,
         placementId: String,
         product: PaywallProduct,
+        expectedCacheGeneration: Long,
     ): VitrinaKitPurchaseResult {
         if (!purchaseGuard.tryLock()) {
             return failure(
@@ -75,14 +76,16 @@ internal class PurchaseCoordinator(
                 message = "A purchase is already in progress.",
             )
         }
-        val cacheGeneration = cache.generation
         try {
+            if (cache.generation != expectedCacheGeneration) {
+                return invalidatedIdentityFailure()
+            }
             return runCatching {
                 purchaseGuarded(
                     scope = scope,
                     placementId = placementId,
                     product = product,
-                    cacheGeneration = cacheGeneration,
+                    cacheGeneration = expectedCacheGeneration,
                 )
             }
                 .fold(
@@ -102,7 +105,10 @@ internal class PurchaseCoordinator(
         }
     }
 
-    suspend fun restore(scope: SubscriberScope): VitrinaKitRestoreResult {
+    suspend fun restore(
+        scope: SubscriberScope,
+        expectedCacheGeneration: Long,
+    ): VitrinaKitRestoreResult {
         if (!purchaseGuard.tryLock()) {
             return VitrinaKitRestoreResult.Failure(
                 error = error(
@@ -111,9 +117,13 @@ internal class PurchaseCoordinator(
                 ),
             )
         }
-        val cacheGeneration = cache.generation
         try {
-            return runCatching { restoreGuarded(scope = scope, cacheGeneration = cacheGeneration) }
+            if (cache.generation != expectedCacheGeneration) {
+                return invalidatedIdentityRestoreFailure()
+            }
+            return runCatching {
+                restoreGuarded(scope = scope, cacheGeneration = expectedCacheGeneration)
+            }
                 .fold(
                     onSuccess = { result -> result },
                     onFailure = { throwable ->
@@ -161,6 +171,19 @@ internal class PurchaseCoordinator(
                 pending.productReference == product.productKey &&
                 pending.capability == adapter.capability
         }
+        if (cached != null && compatible == null) {
+            return if (cached.capability != adapter.capability) {
+                failure(
+                    code = VitrinaKitPurchaseErrorCode.PROVIDER_NOT_SUPPORTED_BY_BUILD,
+                    message = "The build does not contain the required purchase adapter.",
+                )
+            } else {
+                failure(
+                    code = VitrinaKitPurchaseErrorCode.PURCHASE_IN_PROGRESS,
+                    message = "A previous purchase attempt must finish before starting another product.",
+                )
+            }
+        }
         val startKey = compatible?.startIdempotencyKey ?: idempotencyKey()
         val resumeData = compatible?.resumeData
         if (compatible != null && resumeData == null) {
@@ -184,8 +207,24 @@ internal class PurchaseCoordinator(
         if (cache.generation != cacheGeneration) {
             return invalidatedIdentityFailure()
         }
+        val confirmationKey = compatible?.confirmationIdempotencyKey ?: idempotencyKey()
+        if (compatible == null) {
+            cache.storeResumeIfCurrent(
+                key = scope.cacheKey,
+                resume = PendingPurchase(
+                    attemptReference = attempt.reference,
+                    placementId = placementId,
+                    productReference = product.productKey,
+                    capability = attempt.capability,
+                    startIdempotencyKey = startKey,
+                    confirmationIdempotencyKey = confirmationKey,
+                    expiresAt = attempt.expiresAt,
+                    resumeData = null,
+                ),
+                generation = cacheGeneration,
+            )
+        }
         if (attempt.capability != adapter.capability) {
-            cache.clearResumeIfCurrent(key = scope.cacheKey, generation = cacheGeneration)
             return failure(
                 code = VitrinaKitPurchaseErrorCode.PROVIDER_NOT_SUPPORTED_BY_BUILD,
                 message = "The build does not contain the required purchase adapter.",
@@ -209,7 +248,7 @@ internal class PurchaseCoordinator(
             productReference = product.productKey,
             attempt = attempt,
             startKey = startKey,
-            confirmationKey = compatible?.confirmationIdempotencyKey,
+            confirmationKey = confirmationKey,
             adapterResult = adapterResult,
             cacheGeneration = cacheGeneration,
         )
@@ -221,7 +260,7 @@ internal class PurchaseCoordinator(
         productReference: String,
         attempt: PurchaseAttempt,
         startKey: String,
-        confirmationKey: String?,
+        confirmationKey: String,
         adapterResult: VitrinaKitAdapterPurchaseResult,
         cacheGeneration: Long,
     ): VitrinaKitPurchaseResult = when (adapterResult) {
@@ -231,7 +270,7 @@ internal class PurchaseCoordinator(
             productReference = productReference,
             attempt = attempt,
             startKey = startKey,
-            confirmationKey = confirmationKey ?: idempotencyKey(),
+            confirmationKey = confirmationKey,
             proof = adapterResult.proof,
             cacheGeneration = cacheGeneration,
         )
@@ -245,7 +284,7 @@ internal class PurchaseCoordinator(
                     productReference = productReference,
                     capability = attempt.capability,
                     startIdempotencyKey = startKey,
-                    confirmationIdempotencyKey = confirmationKey ?: idempotencyKey(),
+                    confirmationIdempotencyKey = confirmationKey,
                     expiresAt = attempt.expiresAt,
                     resumeData = adapterResult.resumeData,
                 ),
@@ -258,12 +297,10 @@ internal class PurchaseCoordinator(
         }
 
         VitrinaKitAdapterPurchaseResult.Cancelled -> {
-            cache.clearResumeIfCurrent(key = scope.cacheKey, generation = cacheGeneration)
             VitrinaKitPurchaseResult.Cancelled
         }
 
         is VitrinaKitAdapterPurchaseResult.Failure -> {
-            cache.clearResumeIfCurrent(key = scope.cacheKey, generation = cacheGeneration)
             failure(
                 code = VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE,
                 message = "The purchase adapter could not complete presentation.",

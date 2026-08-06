@@ -96,7 +96,8 @@ class PurchaseCoordinatorTest {
         assertEquals(1, adapter.presentCount)
         assertEquals(1, adapter.resumeCount)
         val cached = cache.resume(cacheKey())
-        assertEquals(null, cached)
+        assertEquals("attempt-1", cached?.attemptReference)
+        assertFalse(cached.toString().contains("resume-secret"))
         assertFalse(first.toString().contains("resume-secret"))
     }
 
@@ -245,18 +246,51 @@ class PurchaseCoordinatorTest {
             assertIs<VitrinaKitPurchaseResult.Failure>(result).error.code,
         )
         assertEquals(0, adapter.presentCount)
+
+        val retried = coordinator.purchase(scope = trustedScope(), product = product())
+        assertEquals(
+            VitrinaKitPurchaseErrorCode.PROVIDER_NOT_SUPPORTED_BY_BUILD,
+            assertIs<VitrinaKitPurchaseResult.Failure>(retried).error.code,
+        )
+        assertEquals(1, api.startIdempotencyKeys.size)
     }
 
     @Test
     fun cancellationSendsNoFakeProofAndReleasesGuard() = runTest {
         val api = FakePurchaseApi()
         val adapter = FakePurchaseAdapter(presentResult = VitrinaKitAdapterPurchaseResult.Cancelled)
-        val coordinator = coordinator(api = api, adapter = adapter)
+        val cache = SubscriberCache()
+        val coordinator = coordinator(api = api, adapter = adapter, cache = cache)
 
         assertIs<VitrinaKitPurchaseResult.Cancelled>(coordinator.purchase(trustedScope(), product()))
         assertIs<VitrinaKitPurchaseResult.Cancelled>(coordinator.purchase(trustedScope(), product()))
         assertEquals(0, api.confirmCount)
         assertEquals(2, adapter.presentCount)
+        assertEquals(listOf("start-1"), api.startIdempotencyKeys)
+        assertEquals(1, api.getCount)
+        assertEquals("attempt-1", cache.resume(cacheKey())?.attemptReference)
+        assertEquals("start-1", cache.resume(cacheKey())?.startIdempotencyKey)
+    }
+
+    @Test
+    fun adapterFailureRetainsTheOpenAttemptForSafeSameAttemptRecovery() = runTest {
+        val api = FakePurchaseApi()
+        val adapter = FakePurchaseAdapter(
+            presentResult = VitrinaKitAdapterPurchaseResult.Failure(
+                VitrinaKitAdapterError("Presentation failed."),
+            ),
+        )
+        val cache = SubscriberCache()
+        val coordinator = coordinator(api = api, adapter = adapter, cache = cache)
+
+        assertIs<VitrinaKitPurchaseResult.Failure>(coordinator.purchase(trustedScope(), product()))
+        assertIs<VitrinaKitPurchaseResult.Failure>(coordinator.purchase(trustedScope(), product()))
+
+        assertEquals(listOf("start-1"), api.startIdempotencyKeys)
+        assertEquals(1, api.getCount)
+        assertEquals(2, adapter.presentCount)
+        assertEquals("attempt-1", cache.resume(cacheKey())?.attemptReference)
+        assertEquals("start-1", cache.resume(cacheKey())?.startIdempotencyKey)
     }
 
     @Test
@@ -334,6 +368,56 @@ class PurchaseCoordinatorTest {
     }
 
     @Test
+    fun staleCapturedIdentityCannotStartPurchaseOrRestoreAfterGenerationChanges() = runTest {
+        val cache = SubscriberCache()
+        val api = FakePurchaseApi()
+        val adapter = FakePurchaseAdapter()
+        val coordinator = coordinator(api = api, adapter = adapter, cache = cache)
+        val purchaseGenerationCaptured = CompletableDeferred<Long>()
+        val enterPurchase = CompletableDeferred<Unit>()
+        val purchase = async {
+            val captured = cache.generation
+            purchaseGenerationCaptured.complete(captured)
+            enterPurchase.await()
+            coordinator.purchase(
+                scope = trustedScope(),
+                placementId = "main",
+                product = product(),
+                expectedCacheGeneration = captured,
+            )
+        }
+        purchaseGenerationCaptured.await()
+        cache.clearAll()
+        enterPurchase.complete(Unit)
+
+        assertEquals(
+            VitrinaKitPurchaseErrorCode.IDENTITY_SESSION_INVALID,
+            assertIs<VitrinaKitPurchaseResult.Failure>(purchase.await()).error.code,
+        )
+        assertEquals(emptyList(), api.startIdempotencyKeys)
+        assertEquals(0, adapter.presentCount)
+
+        val restoreGenerationCaptured = CompletableDeferred<Long>()
+        val enterRestore = CompletableDeferred<Unit>()
+        val restore = async {
+            val captured = cache.generation
+            restoreGenerationCaptured.complete(captured)
+            enterRestore.await()
+            coordinator.restore(scope = trustedScope(), expectedCacheGeneration = captured)
+        }
+        restoreGenerationCaptured.await()
+        cache.clearAll()
+        enterRestore.complete(Unit)
+
+        assertEquals(
+            VitrinaKitPurchaseErrorCode.IDENTITY_SESSION_INVALID,
+            assertIs<VitrinaKitRestoreResult.Failure>(restore.await()).error.code,
+        )
+        assertEquals(0, adapter.restoreQueryCount)
+        assertEquals(0, api.restoreCount)
+    }
+
+    @Test
     fun restoreMapsPurchasesNoPurchasesAndOwnershipFailure() = runTest {
         val adapter = FakePurchaseAdapter(
             restoreResult = listOf(
@@ -379,10 +463,20 @@ class PurchaseCoordinatorTest {
     }
 
     @Test
-    fun distinctOperationsUseDistinctIdempotencyKeys() = runTest {
-        val api = FakePurchaseApi()
-        val adapter = FakePurchaseAdapter(presentResult = VitrinaKitAdapterPurchaseResult.Cancelled)
-        val keys = ArrayDeque(listOf("start-a", "start-b"))
+    fun terminalAttemptsUseDistinctIdempotencyKeys() = runTest {
+        val api = FakePurchaseApi(
+            confirmResult = PurchaseApiResult.Success(
+                PurchaseConfirmation(
+                    attempt = attempt(status = VitrinaKitPurchaseAttemptStatus.SUCCEEDED),
+                    pending = false,
+                    profile = profile(hasAccess = true),
+                ),
+            ),
+        )
+        val adapter = FakePurchaseAdapter(
+            presentResult = VitrinaKitAdapterPurchaseResult.ProofReady(VitrinaKitProviderProof("proof")),
+        )
+        val keys = ArrayDeque(listOf("start-a", "confirm-a", "start-b", "confirm-b"))
         val coordinator = PurchaseCoordinator(
             adapter = adapter,
             api = api,
@@ -408,13 +502,17 @@ private class FakePurchaseAdapter(
     var presentCount = 0
     var resumeCount = 0
     var closeCount = 0
+    var restoreQueryCount = 0
 
     override suspend fun present(instruction: VitrinaKitPurchaseInstruction): VitrinaKitAdapterPurchaseResult {
         presentCount += 1
         return onPresent?.invoke() ?: presentResult
     }
 
-    override suspend fun queryRestorablePurchases(): List<VitrinaKitRestorablePurchase> = restoreResult
+    override suspend fun queryRestorablePurchases(): List<VitrinaKitRestorablePurchase> {
+        restoreQueryCount += 1
+        return restoreResult
+    }
 
     override suspend fun resume(
         instruction: VitrinaKitPurchaseInstruction,
@@ -446,6 +544,7 @@ private class FakePurchaseApi(
     val startIdempotencyKeys = mutableListOf<String>()
     var confirmCount = 0
     var getCount = 0
+    var restoreCount = 0
     private var proofSnapshot = ""
 
     override suspend fun startPurchase(
@@ -485,7 +584,10 @@ private class FakePurchaseApi(
         scope: SubscriberScope,
         purchases: List<VitrinaKitRestorablePurchase>,
         capability: VitrinaKitPurchaseCapability,
-    ): PurchaseApiResult<PurchaseRestoreResponse> = restoreApiResult
+    ): PurchaseApiResult<PurchaseRestoreResponse> {
+        restoreCount += 1
+        return restoreApiResult
+    }
 
     fun confirmedProofText(): String = proofSnapshot
 }
@@ -504,7 +606,15 @@ private fun coordinator(
 private suspend fun PurchaseCoordinator.purchase(
     scope: SubscriberScope,
     product: PaywallProduct,
-): VitrinaKitPurchaseResult = purchase(scope = scope, placementId = "main", product = product)
+): VitrinaKitPurchaseResult = purchase(
+    scope = scope,
+    placementId = "main",
+    product = product,
+    expectedCacheGeneration = 0,
+)
+
+private suspend fun PurchaseCoordinator.restore(scope: SubscriberScope): VitrinaKitRestoreResult =
+    restore(scope = scope, expectedCacheGeneration = 0)
 
 private fun trustedScope(): SubscriberScope = SubscriberScope(
     cacheKey = cacheKey(),

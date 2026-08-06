@@ -8,6 +8,7 @@ plugins {
 apply(from = rootProject.file("gradle/publishing-conventions.gradle.kts"))
 
 val googlePlayBillingVersion = rootProject.extra["googlePlayBillingVersion"] as String
+val kotlinxCoroutinesVersion = rootProject.extra["kotlinxCoroutinesVersion"] as String
 
 kotlin {
     androidLibrary {
@@ -20,14 +21,15 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":vitrinakit-core"))
-            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinxCoroutinesVersion")
         }
         androidMain.dependencies {
             implementation("com.android.billingclient:billing:$googlePlayBillingVersion")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:$kotlinxCoroutinesVersion")
         }
         named("androidHostTest").dependencies {
             implementation(kotlin("test"))
-            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:$kotlinxCoroutinesVersion")
         }
     }
 }

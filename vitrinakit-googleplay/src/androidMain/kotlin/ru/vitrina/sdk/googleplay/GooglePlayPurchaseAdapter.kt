@@ -8,6 +8,8 @@ import java.util.WeakHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -103,6 +105,7 @@ class GooglePlayPurchaseAdapter internal constructor(
             )
 
         val waiter = ActivePurchaseWaiter(
+            attemptReference = instruction.attemptReference,
             productId = instruction.productId,
             result = CompletableDeferred(),
             emptyOkCallback = CompletableDeferred(),
@@ -261,6 +264,16 @@ class GooglePlayPurchaseAdapter internal constructor(
         instruction: VitrinaKitPurchaseInstruction,
         completeActiveWaiter: Boolean = false,
     ): VitrinaKitAdapterPurchaseResult? {
+        val claimedWaiter = if (completeActiveWaiter) {
+            synchronized(recoveryStateLock) {
+                activeWaiter?.takeIf { waiter ->
+                    waiter.attemptReference == instruction.attemptReference &&
+                        waiter.productId == instruction.productId
+                }
+            }
+        } else {
+            null
+        }
         val query = resources().connection.queryPurchases()
         if (query.responseCode != BillingResponseCode.OK) {
             return failure(
@@ -268,24 +281,15 @@ class GooglePlayPurchaseAdapter internal constructor(
                 message = "Google Play purchase recovery is unavailable.",
             )
         }
-        val waiter = if (completeActiveWaiter) {
-            synchronized(recoveryStateLock) { activeWaiter }
-        } else {
-            null
-        }
-        val waiterMatches = waiter?.let { current ->
+        val waiterMatches = claimedWaiter?.let { waiter ->
             query.values
-                .filter { purchase -> current.productId in purchase.productIds && !isAccepted(purchase) }
+                .filter { purchase -> waiter.productId in purchase.productIds && !isAccepted(purchase) }
                 .distinctBy { purchase -> purchase.purchaseToken }
         }.orEmpty()
-        if (waiter != null && waiterMatches.isNotEmpty()) {
-            waiter.result.complete(
-                BillingPurchaseUpdate(
-                    responseCode = BillingResponseCode.OK,
-                    purchases = waiterMatches,
-                ),
-            )
-            return null
+        if (claimedWaiter != null && waiterMatches.isNotEmpty()) {
+            if (deliverRecoveredToPresentation(waiter = claimedWaiter, purchases = waiterMatches)) {
+                return null
+            }
         }
         val matching = deduplicateQueried(
             queried = query.values,
@@ -301,6 +305,32 @@ class GooglePlayPurchaseAdapter internal constructor(
             return pending(instruction)
         }
         return null
+    }
+
+    private suspend fun deliverRecoveredToPresentation(
+        waiter: ActivePurchaseWaiter,
+        purchases: List<BillingPurchase>,
+    ): Boolean {
+        val update = BillingPurchaseUpdate(
+            responseCode = BillingResponseCode.OK,
+            purchases = purchases,
+        )
+        if (waiter.result.complete(update)) {
+            return true
+        }
+        val completed = runCatching { waiter.result.await() }.getOrElse {
+            currentCoroutineContext().ensureActive()
+            return false
+        }
+        if (completed.responseCode != BillingResponseCode.OK) {
+            return false
+        }
+        return completed.purchases.any { completedPurchase ->
+            purchases.any { recoveredPurchase ->
+                completedPurchase.purchaseToken == recoveredPurchase.purchaseToken &&
+                    completedPurchase.state.owns(recovered = recoveredPurchase.state)
+            }
+        }
     }
 
     private fun deduplicateQueried(
@@ -485,6 +515,7 @@ class GooglePlayPurchaseAdapter internal constructor(
 }
 
 private data class ActivePurchaseWaiter(
+    val attemptReference: String,
     val productId: String,
     val result: CompletableDeferred<BillingPurchaseUpdate>,
     val emptyOkCallback: CompletableDeferred<Unit>,
@@ -505,6 +536,14 @@ private data class ForegroundQuery(
     val attemptReference: String,
     val timestampMillis: Long,
 )
+
+private fun BillingPurchaseState.owns(recovered: BillingPurchaseState): Boolean = when (this) {
+    BillingPurchaseState.PURCHASED ->
+        recovered == BillingPurchaseState.PURCHASED || recovered == BillingPurchaseState.PENDING
+
+    BillingPurchaseState.PENDING -> recovered == BillingPurchaseState.PENDING
+    BillingPurchaseState.UNSPECIFIED -> false
+}
 
 private fun BillingResponseCode.isRetryable(): Boolean = when (this) {
     BillingResponseCode.SERVICE_TIMEOUT,

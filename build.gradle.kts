@@ -20,6 +20,7 @@ plugins {
 group = "ru.vitrina"
 version = "0.1.0-rc.6"
 extra["googlePlayBillingVersion"] = "9.1.0"
+extra["kotlinxCoroutinesVersion"] = "1.10.2"
 
 subprojects {
     group = rootProject.group
@@ -93,6 +94,9 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
     @get:Input
     abstract val googlePlayBillingVersion: Property<String>
 
+    @get:Input
+    abstract val kotlinxCoroutinesVersion: Property<String>
+
     @TaskAction
     fun verify() {
         val repository = repositoryDirectory.get().asFile
@@ -142,6 +146,48 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
             )
         }
         val googlePlayPom = googlePlayPoms.single().readText()
+        val coroutinesAndroidArtifact = "<artifactId>kotlinx-coroutines-android</artifactId>"
+        expectedArtifactIds.get()
+            .filterNot { artifactId -> artifactId == googlePlayAndroidArtifactId.get() }
+            .forEach { artifactId ->
+                val artifactDirectory = repository.resolve("ru/vitrina/$artifactId")
+                artifactDirectory.walkTopDown()
+                    .filter { file -> file.extension == "pom" }
+                    .forEach { pomFile ->
+                        if (pomFile.readText().contains(coroutinesAndroidArtifact)) {
+                            throw GradleException(
+                                "Only the Google Play Android POM may depend on " +
+                                    "kotlinx-coroutines-android: $pomFile",
+                            )
+                        }
+                    }
+            }
+        val coroutinesArtifactIndex = googlePlayPom.indexOf(coroutinesAndroidArtifact)
+        val coroutinesBlockStart = googlePlayPom.lastIndexOf("<dependency>", coroutinesArtifactIndex)
+        val coroutinesBlockEnd = googlePlayPom.indexOf("</dependency>", coroutinesArtifactIndex)
+        val coroutinesDependency = if (coroutinesBlockStart >= 0 && coroutinesBlockEnd >= 0) {
+            googlePlayPom.substring(coroutinesBlockStart, coroutinesBlockEnd)
+        } else {
+            ""
+        }
+        val hasExactRuntimeCoroutinesAndroid =
+            coroutinesDependency.contains("<groupId>org.jetbrains.kotlinx</groupId>") &&
+                coroutinesDependency.contains(coroutinesAndroidArtifact) &&
+                coroutinesDependency.contains("<version>${kotlinxCoroutinesVersion.get()}</version>") &&
+                coroutinesDependency.contains("<scope>runtime</scope>") &&
+                !coroutinesDependency.contains("<scope>compile</scope>")
+        if (!hasExactRuntimeCoroutinesAndroid) {
+            throw GradleException(
+                "Google Play Android POM must contain kotlinx-coroutines-android " +
+                    "${kotlinxCoroutinesVersion.get()} with runtime scope: ${googlePlayPoms.single()}",
+            )
+        }
+        if (coroutinesArtifactIndex != googlePlayPom.lastIndexOf(coroutinesAndroidArtifact)) {
+            throw GradleException(
+                "Google Play Android POM must contain exactly one kotlinx-coroutines-android " +
+                    "dependency: ${googlePlayPoms.single()}",
+            )
+        }
         val billingGroup = "<groupId>com.android.billingclient</groupId>"
         val billingGroupIndex = googlePlayPom.indexOf(billingGroup)
         val billingBlockStart = googlePlayPom.lastIndexOf("<dependency>", billingGroupIndex)
@@ -248,6 +294,7 @@ tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
     providerArtifactIds.set(requiredProviderArtifactIds.sorted())
     googlePlayAndroidArtifactId.set("vitrinakit-googleplay-android$vitrinaKitPublicationSuffix")
     googlePlayBillingVersion.set(rootProject.extra["googlePlayBillingVersion"] as String)
+    kotlinxCoroutinesVersion.set(rootProject.extra["kotlinxCoroutinesVersion"] as String)
     dependsOn(
         "verifySdk",
         prepareReleaseArtifactRepository,

@@ -5,6 +5,7 @@
 
 package ru.vitrina.sdk.googleplay
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancelAndJoin
@@ -358,6 +359,185 @@ class GooglePlayPurchaseAdapterTest {
     }
 
     @Test
+    fun foregroundQueryKeepsPresentationOwnershipWhileProviderQueryIsSuspended() = runTest {
+        val queryStarted = CompletableDeferred<Unit>()
+        val releaseQuery = CompletableDeferred<Unit>()
+        val gateway = FakeBillingGateway(
+            products = listOf(baseProduct()),
+            beforePurchaseQuery = { queryCount ->
+                if (queryCount == 2) {
+                    queryStarted.complete(Unit)
+                    releaseQuery.await()
+                }
+            },
+        )
+        val adapter = adapter(gateway)
+        val purchase = async { adapter.present(instruction()) }
+        runCurrent()
+        gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
+        val foreground = async { adapter.recover(instruction = instruction(), resumeData = null) }
+        queryStarted.await()
+
+        gateway.emit(purchased(TOKEN_ONE))
+        val result = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(purchase.await())
+        assertFalse(hasActiveWaiter(adapter))
+        releaseQuery.complete(Unit)
+
+        assertEquals(null, foreground.await())
+        assertEquals(TOKEN_ONE, proofValue(result))
+    }
+
+    @Test
+    fun foregroundQueryOwnsProofWhenClaimedPresentationIsCancelled() = runTest {
+        val queryStarted = CompletableDeferred<Unit>()
+        val releaseQuery = CompletableDeferred<Unit>()
+        val gateway = FakeBillingGateway(
+            products = listOf(baseProduct()),
+            beforePurchaseQuery = { queryCount ->
+                if (queryCount == 2) {
+                    queryStarted.complete(Unit)
+                    releaseQuery.await()
+                }
+            },
+        )
+        val adapter = adapter(gateway)
+        val purchase = async { adapter.present(instruction()) }
+        runCurrent()
+        gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
+        val foreground = async { adapter.recover(instruction = instruction(), resumeData = null) }
+        queryStarted.await()
+
+        purchase.cancelAndJoin()
+        assertFalse(hasActiveWaiter(adapter))
+        releaseQuery.complete(Unit)
+
+        val recovered = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(foreground.await())
+        assertEquals(TOKEN_ONE, proofValue(recovered))
+    }
+
+    @Test
+    fun foregroundQueryOwnsProofWhenPresentationCompletedWithProviderError() = runTest {
+        val queryStarted = CompletableDeferred<Unit>()
+        val releaseQuery = CompletableDeferred<Unit>()
+        val gateway = FakeBillingGateway(
+            products = listOf(baseProduct()),
+            beforePurchaseQuery = { queryCount ->
+                if (queryCount == 2) {
+                    queryStarted.complete(Unit)
+                    releaseQuery.await()
+                }
+            },
+        )
+        val adapter = adapter(gateway)
+        val purchase = async { adapter.present(instruction()) }
+        runCurrent()
+        gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
+        val foreground = async { adapter.recover(instruction = instruction(), resumeData = null) }
+        queryStarted.await()
+
+        gateway.emit(
+            BillingPurchaseUpdate(
+                responseCode = BillingResponseCode.SERVICE_DISCONNECTED,
+                purchases = listOf(purchasedPurchase(TOKEN_ONE)),
+            ),
+        )
+        assertIs<VitrinaKitAdapterPurchaseResult.Failure>(purchase.await())
+        releaseQuery.complete(Unit)
+
+        val recovered = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(foreground.await())
+        assertEquals(TOKEN_ONE, proofValue(recovered))
+    }
+
+    @Test
+    fun purchasedQueryIsNotOwnedByUnspecifiedCallbackForSameToken() = runTest {
+        val queryStarted = CompletableDeferred<Unit>()
+        val releaseQuery = CompletableDeferred<Unit>()
+        val gateway = FakeBillingGateway(
+            products = listOf(baseProduct()),
+            beforePurchaseQuery = { queryCount ->
+                if (queryCount == 2) {
+                    queryStarted.complete(Unit)
+                    releaseQuery.await()
+                }
+            },
+        )
+        val adapter = adapter(gateway)
+        val purchase = async { adapter.present(instruction()) }
+        runCurrent()
+        gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
+        val foreground = async { adapter.recover(instruction = instruction(), resumeData = null) }
+        queryStarted.await()
+
+        gateway.emit(
+            BillingPurchaseUpdate(
+                responseCode = BillingResponseCode.OK,
+                purchases = listOf(unspecifiedPurchase(TOKEN_ONE)),
+            ),
+        )
+        assertIs<VitrinaKitAdapterPurchaseResult.Failure>(purchase.await())
+        releaseQuery.complete(Unit)
+
+        val recovered = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(foreground.await())
+        assertEquals(TOKEN_ONE, proofValue(recovered))
+    }
+
+    @Test
+    fun purchasedQueryIsNotOwnedByPendingCallbackForSameToken() = runTest {
+        val queryStarted = CompletableDeferred<Unit>()
+        val releaseQuery = CompletableDeferred<Unit>()
+        val gateway = FakeBillingGateway(
+            products = listOf(baseProduct()),
+            beforePurchaseQuery = { queryCount ->
+                if (queryCount == 2) {
+                    queryStarted.complete(Unit)
+                    releaseQuery.await()
+                }
+            },
+        )
+        val adapter = adapter(gateway)
+        val purchase = async { adapter.present(instruction()) }
+        runCurrent()
+        gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
+        val foreground = async { adapter.recover(instruction = instruction(), resumeData = null) }
+        queryStarted.await()
+
+        gateway.emit(
+            BillingPurchaseUpdate(
+                responseCode = BillingResponseCode.OK,
+                purchases = listOf(pendingPurchase(TOKEN_ONE)),
+            ),
+        )
+        assertIs<VitrinaKitAdapterPurchaseResult.Pending>(purchase.await())
+        releaseQuery.complete(Unit)
+
+        val recovered = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(foreground.await())
+        assertEquals(TOKEN_ONE, proofValue(recovered))
+    }
+
+    @Test
+    fun foregroundRecoveryForOlderAttemptDoesNotCompleteNewerWaiter() = runTest {
+        val gateway = FakeBillingGateway(products = listOf(baseProduct()))
+        val adapter = adapter(gateway)
+        val newer = async {
+            adapter.present(instruction(attemptReference = "newer-attempt"))
+        }
+        runCurrent()
+        gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
+
+        val recovered = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(
+            adapter.recover(instruction = instruction(), resumeData = null),
+        )
+        assertFalse(newer.isCompleted)
+        gateway.emit(purchased(TOKEN_TWO))
+
+        assertEquals(TOKEN_ONE, proofValue(recovered))
+        assertEquals(
+            TOKEN_TWO,
+            proofValue(assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(newer.await())),
+        )
+    }
+
+    @Test
     fun foregroundRecoveryReturnsAttemptBoundProofWithoutRawPurchaseCache() = runTest {
         val gateway = FakeBillingGateway(products = listOf(baseProduct()))
         gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
@@ -656,6 +836,12 @@ class GooglePlayPurchaseAdapterTest {
         state = BillingPurchaseState.PENDING,
     )
 
+    private fun unspecifiedPurchase(token: String): BillingPurchase = BillingPurchase(
+        productIds = listOf(PRODUCT_ID),
+        purchaseToken = token,
+        state = BillingPurchaseState.UNSPECIFIED,
+    )
+
     private fun pending(token: String): BillingPurchase = pendingPurchase(token)
 
     private fun proofValue(result: VitrinaKitAdapterPurchaseResult.ProofReady): String =
@@ -722,6 +908,7 @@ private class FakeBillingGateway(
     private val purchaseQueryCodes: ArrayDeque<BillingResponseCode> =
         ArrayDeque(listOf(BillingResponseCode.OK)),
     private val afterLaunch: () -> Unit = {},
+    private val beforePurchaseQuery: suspend (Int) -> Unit = {},
 ) : GooglePlayBillingGateway {
     var purchases: List<BillingPurchase> = emptyList()
     val productQueries = mutableListOf<String>()
@@ -748,6 +935,7 @@ private class FakeBillingGateway(
 
     override suspend fun queryPurchases(): BillingQueryResult<BillingPurchase> {
         purchaseQueryCount += 1
+        beforePurchaseQuery(purchaseQueryCount)
         val response = if (purchaseQueryCodes.size > 1) {
             purchaseQueryCodes.removeFirst()
         } else {

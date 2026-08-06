@@ -8,15 +8,19 @@ package ru.vitrina.sdk.rustore
 import android.content.Intent
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
@@ -536,6 +540,160 @@ class RuStorePurchaseAdapterTest {
         assertEquals(1, creations)
         assertEquals("RSP-UNKNOWN", failure.error.supportReference)
         assertFalse(failure.toString().contains("provider-detail"))
+    }
+
+    @Test
+    fun taskTrackerCancelsSuspendedQueryExactlyOnceAndIgnoresLateProviderResult() = runTest {
+        val tracker = RuStoreActiveTaskTracker()
+        var cancelCalls = 0
+        lateinit var completeQuery: (String) -> Unit
+        val query = async {
+            tracker.await(
+                cancelProvider = { cancelCalls += 1 },
+                registerListeners = { onSuccess, _ -> completeQuery = onSuccess },
+            )
+        }
+        runCurrent()
+
+        tracker.close()
+        completeQuery("provider-result-after-close")
+
+        assertFailsWith<CancellationException> { query.await() }
+        assertEquals(1, cancelCalls)
+
+        var completedCancelCalls = 0
+        val completedTracker = RuStoreActiveTaskTracker()
+        val completed = completedTracker.await(
+            cancelProvider = { completedCancelCalls += 1 },
+            registerListeners = { onSuccess, _ -> onSuccess("synchronous-result") },
+        )
+        completedTracker.close()
+
+        assertEquals("synchronous-result", completed)
+        assertEquals(0, completedCancelCalls)
+    }
+
+    @Test
+    fun taskTrackerRemovesEveryTerminalPathAndRejectsWorkAfterClose() = runTest {
+        val providerFailure = IllegalStateException("provider-failure")
+        var failedTaskCancelCalls = 0
+        val failedTracker = RuStoreActiveTaskTracker()
+        val failure = assertFailsWith<IllegalStateException> {
+            failedTracker.await<String>(
+                cancelProvider = { failedTaskCancelCalls += 1 },
+                registerListeners = { _, onFailure -> onFailure(providerFailure) },
+            )
+        }
+        failedTracker.close()
+        assertEquals("provider-failure", failure.message)
+        assertEquals(0, failedTaskCancelCalls)
+
+        var cancelledTaskCancelCalls = 0
+        lateinit var completeCancelledTask: (String) -> Unit
+        lateinit var failCancelledTask: (Throwable) -> Unit
+        val cancelledTracker = RuStoreActiveTaskTracker()
+        val cancelledTask = async {
+            cancelledTracker.await(
+                cancelProvider = { cancelledTaskCancelCalls += 1 },
+                registerListeners = { onSuccess, onFailure ->
+                    completeCancelledTask = onSuccess
+                    failCancelledTask = onFailure
+                },
+            )
+        }
+        runCurrent()
+        cancelledTask.cancelAndJoin()
+        completeCancelledTask("late-result")
+        failCancelledTask(IllegalStateException("late-failure"))
+        cancelledTracker.close()
+        assertEquals(1, cancelledTaskCancelCalls)
+
+        var registrationCancelCalls = 0
+        val registrationTracker = RuStoreActiveTaskTracker()
+        assertFailsWith<IllegalArgumentException> {
+            registrationTracker.await<String>(
+                cancelProvider = { registrationCancelCalls += 1 },
+                registerListeners = { _, _ -> throw IllegalArgumentException("listener-registration") },
+            )
+        }
+        registrationTracker.close()
+        assertEquals(1, registrationCancelCalls)
+
+        var postCloseCancelCalls = 0
+        var postCloseListenerRegistrations = 0
+        val closedTracker = RuStoreActiveTaskTracker().also(RuStoreActiveTaskTracker::close)
+        val postCloseTask = async {
+            closedTracker.await<String>(
+                cancelProvider = { postCloseCancelCalls += 1 },
+                registerListeners = { _, _ -> postCloseListenerRegistrations += 1 },
+            )
+        }
+        runCurrent()
+        assertFailsWith<CancellationException> { postCloseTask.await() }
+        assertEquals(1, postCloseCancelCalls)
+        assertEquals(0, postCloseListenerRegistrations)
+    }
+
+    @Test
+    fun taskTrackerLinearizesConcurrentCompletionAndClose() = runTest {
+        val tracker = RuStoreActiveTaskTracker()
+        var cancelCalls = 0
+        lateinit var completeQuery: (String) -> Unit
+        val query = async {
+            tracker.await(
+                cancelProvider = { cancelCalls += 1 },
+                registerListeners = { onSuccess, _ -> completeQuery = onSuccess },
+            )
+        }
+        runCurrent()
+        val executor = Executors.newFixedThreadPool(2)
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        try {
+            val completion = executor.submit {
+                ready.countDown()
+                start.await()
+                completeQuery("concurrent-result")
+            }
+            val closing = executor.submit {
+                ready.countDown()
+                start.await()
+                tracker.close()
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS))
+            start.countDown()
+            completion.get(5, TimeUnit.SECONDS)
+            closing.get(5, TimeUnit.SECONDS)
+
+            val outcome = runCatching { query.await() }
+            if (outcome.isSuccess) {
+                assertEquals("concurrent-result", outcome.getOrThrow())
+                assertEquals(0, cancelCalls)
+            } else {
+                assertIs<CancellationException>(outcome.exceptionOrNull())
+                assertEquals(1, cancelCalls)
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun trackedPurchaseSuppressesCallbackAfterCloseAndCancelsExactlyOnce() {
+        val tracker = RuStoreActiveTaskTracker()
+        var providerCancelCalls = 0
+        var callbackCalls = 0
+        val purchaseTask = tracker.track { providerCancelCalls += 1 }
+
+        tracker.close()
+        if (purchaseTask.complete()) {
+            callbackCalls += 1
+        }
+        purchaseTask.cancel()
+        tracker.close()
+
+        assertEquals(1, providerCancelCalls)
+        assertEquals(0, callbackCalls)
     }
 
     private fun adapter(

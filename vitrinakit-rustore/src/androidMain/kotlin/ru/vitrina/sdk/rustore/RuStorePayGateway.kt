@@ -1,7 +1,7 @@
 package ru.vitrina.sdk.rustore
 
 import android.content.Intent
-import java.util.Collections
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellableContinuation
@@ -94,13 +94,13 @@ internal interface RuStorePayGateway {
 internal class RealRuStorePayGateway(
     private val client: RuStorePayClient = RuStorePayClient.instance,
 ) : RuStorePayGateway {
-    private val activeTasks = Collections.synchronizedSet(mutableSetOf<Task<*>>())
+    private val activeTasks = RuStoreActiveTaskTracker()
 
     override suspend fun getProducts(productId: String): List<RuStoreProduct> =
         runProviderQuery {
             client.getProductInteractor()
                 .getProducts(listOf(ProductId(productId)))
-                .awaitCancellable()
+                .awaitTracked(activeTasks)
                 .map { product -> RuStoreProduct(productId = product.productId.value) }
         }
 
@@ -108,7 +108,7 @@ internal class RealRuStorePayGateway(
         runProviderQuery {
             client.getPurchaseInteractor()
                 .getPurchases()
-                .awaitCancellable()
+                .awaitTracked(activeTasks)
                 .mapNotNull { purchase ->
                     when (purchase) {
                         is ProductPurchase -> RuStorePurchase(
@@ -144,17 +144,26 @@ internal class RealRuStorePayGateway(
         } catch (exception: Throwable) {
             throw exception.toSafeRuStoreGatewayException()
         }
-        activeTasks += task
-        task.addOnSuccessListener { result ->
-            activeTasks -= task
-            callback(result.toDomain())
-        }.addOnFailureListener { throwable ->
-            activeTasks -= task
-            callback(throwable.toPurchaseOutcome())
+        val trackedTask = activeTasks.track { task.cancel() }
+        try {
+            task.addOnSuccessListener { result ->
+                if (trackedTask.complete()) {
+                    callback(result.toDomain())
+                }
+            }.addOnFailureListener { throwable ->
+                if (trackedTask.complete()) {
+                    callback(throwable.toPurchaseOutcome())
+                }
+            }
+        } catch (exception: CancellationException) {
+            trackedTask.cancel()
+            throw exception
+        } catch (exception: Throwable) {
+            trackedTask.cancel()
+            throw exception.toSafeRuStoreGatewayException()
         }
         return RuStorePurchaseOperation {
-            activeTasks -= task
-            task.cancel()
+            trackedTask.cancel()
         }
     }
 
@@ -169,16 +178,119 @@ internal class RealRuStorePayGateway(
     }
 
     override fun close() {
-        val tasks = synchronized(activeTasks) { activeTasks.toList().also { activeTasks.clear() } }
-        tasks.forEach(Task<*>::cancel)
+        activeTasks.close()
     }
 }
 
-private suspend fun <T> Task<T>.awaitCancellable(): T = suspendCancellableCoroutine { continuation ->
-    addOnSuccessListener { value -> continuation.resumeIfActive(value) }
-        .addOnFailureListener { throwable -> continuation.resumeExceptionIfActive(throwable) }
-    continuation.invokeOnCancellation { cancel() }
+internal class RuStoreActiveTaskTracker {
+    private val lock = Any()
+    private val tasks = mutableSetOf<TrackedTask>()
+    private var closed = false
+
+    internal fun track(cancelProvider: () -> Unit): TrackedTask {
+        val trackedTask = TrackedTask(tracker = this, cancelProvider = cancelProvider)
+        val accepted = synchronized(lock) {
+            if (closed) {
+                false
+            } else {
+                tasks += trackedTask
+                true
+            }
+        }
+        if (!accepted) {
+            trackedTask.cancelProviderOnce()
+        }
+        return trackedTask
+    }
+
+    internal suspend fun <T> await(
+        cancelProvider: () -> Unit,
+        registerListeners: (
+            onSuccess: (T) -> Unit,
+            onFailure: (Throwable) -> Unit,
+        ) -> Unit,
+    ): T = suspendCancellableCoroutine { continuation ->
+        val trackedTask = track {
+            try {
+                continuation.cancel(CancellationException("RuStore Pay task was cancelled."))
+            } finally {
+                cancelProvider()
+            }
+        }
+        continuation.invokeOnCancellation { trackedTask.cancel() }
+        if (!trackedTask.isActive()) {
+            return@suspendCancellableCoroutine
+        }
+        try {
+            registerListeners(
+                { value ->
+                    if (trackedTask.complete()) {
+                        continuation.resumeIfActive(value)
+                    }
+                },
+                { throwable ->
+                    if (trackedTask.complete()) {
+                        continuation.resumeExceptionIfActive(throwable)
+                    }
+                },
+            )
+        } catch (exception: Throwable) {
+            if (trackedTask.complete()) {
+                continuation.resumeExceptionIfActive(exception)
+                trackedTask.cancelProviderOnce()
+            }
+        }
+    }
+
+    internal fun close() {
+        val trackedTasks = synchronized(lock) {
+            closed = true
+            tasks.toList().also { tasks.clear() }
+        }
+        trackedTasks.forEach(TrackedTask::cancelProviderOnce)
+    }
+
+    private fun complete(trackedTask: TrackedTask): Boolean =
+        synchronized(lock) { tasks.remove(trackedTask) }
+
+    private fun cancel(trackedTask: TrackedTask) {
+        if (synchronized(lock) { tasks.remove(trackedTask) }) {
+            trackedTask.cancelProviderOnce()
+        }
+    }
+
+    private fun isActive(trackedTask: TrackedTask): Boolean =
+        synchronized(lock) { trackedTask in tasks }
+
+    internal class TrackedTask internal constructor(
+        private val tracker: RuStoreActiveTaskTracker,
+        private val cancelProvider: () -> Unit,
+    ) {
+        private val providerCancellationStarted = AtomicBoolean(false)
+
+        internal fun complete(): Boolean = tracker.complete(this)
+
+        internal fun cancel() {
+            tracker.cancel(this)
+        }
+
+        internal fun isActive(): Boolean = tracker.isActive(this)
+
+        internal fun cancelProviderOnce() {
+            if (providerCancellationStarted.compareAndSet(false, true)) {
+                runCatching(cancelProvider)
+            }
+        }
+    }
 }
+
+private suspend fun <T> Task<T>.awaitTracked(tracker: RuStoreActiveTaskTracker): T =
+    tracker.await(
+        cancelProvider = { cancel() },
+        registerListeners = { onSuccess, onFailure ->
+            addOnSuccessListener(onSuccess).addOnFailureListener(onFailure)
+        },
+    )
 
 private fun ProductPurchaseResult.toDomain(): RuStorePurchaseOutcome =
     RuStorePurchaseOutcome.Success(

@@ -8,7 +8,7 @@ help:
 	@printf '%s\n' '  make sample             Compile and inspect Android flavor variants'
 	@printf '%s\n' '  make docs               Generate Dokka API docs'
 	@printf '%s\n' '  make release-dry-run    Build local Maven/KMP artifacts'
-	@printf '%s\n' '  make xcframework        Build the iOS XCFramework'
+	@printf '%s\n' '  make xcframework        Build core and hosted iOS XCFrameworks'
 	@printf '%s\n' '  make install-git-hooks  Install repository-managed git hooks'
 
 verify: security release-dry-run

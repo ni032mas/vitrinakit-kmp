@@ -150,7 +150,7 @@ make verify
 
 The gates run all SDK tests, compile both sample flavors, generate Dokka with
 warnings as failures, inspect local Maven metadata and provider isolation, build
-the XCFramework, and scan for secrets.
+the core and hosted XCFrameworks, and scan for secrets.
 
 Production dry-run artifacts are written below `build/repository`. For example,
 the core root publication is
@@ -175,11 +175,20 @@ documentation, logs, or mobile code.
 
 ## iOS
 
-Core exposes `iosArm64` and `iosSimulatorArm64` frameworks:
+Core and hosted checkout expose `iosArm64` and `iosSimulatorArm64` frameworks:
 
 ```bash
 ./gradlew assembleVitrinaKitXCFramework
 ```
 
-The output is `build/XCFrameworks/release/VitrinaKit.xcframework`. Native store
-adapters are Android-only; hosted checkout is the cross-platform adapter.
+The command produces:
+
+- `vitrinakit-core/build/XCFrameworks/release/VitrinaKit.xcframework` for a
+  custom adapter or core-only integration;
+- `vitrinakit-hosted/build/XCFrameworks/release/VitrinaKitHosted.xcframework`
+  for hosted checkout.
+
+The hosted framework exports the core public API. Link it by itself and use
+`import VitrinaKitHosted` for hosted checkout; do not also link the core
+framework into the same app target. Google Play and RuStore adapters are
+Android-only.

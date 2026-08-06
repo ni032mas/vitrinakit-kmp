@@ -8,6 +8,10 @@
   present and deprecated for the 0.1 RC migration line.
 - Identity, provider-neutral purchase/restore results, adapter registration,
   and provider artifacts are additive public surfaces.
+- Hosted checkout adds `iosArm64` and `iosSimulatorArm64` publications. The
+  additive `VitrinaKitHosted.xcframework` exports the existing core API and the
+  hosted adapter as one iOS module; the standalone core `VitrinaKit.xcframework`
+  remains available for custom adapters.
 
 ## Approved breaking migration
 

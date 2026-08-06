@@ -299,11 +299,14 @@ that produces at least:
 
 - provider-neutral core/common artifact;
 - Android Google Play adapter artifact;
-- hosted checkout adapter artifact;
+- hosted checkout JVM, Android, and Apple artifacts, with an iOS XCFramework
+  that exports core for a single-framework integration;
 - RuStore adapter artifact when implemented.
 
 Provider SDK dependencies must not leak transitively into core. Consumer
-dependency reports and artifact inspection must prove this boundary.
+dependency reports and artifact inspection must prove this boundary. The
+standalone core XCFramework remains available for custom adapters; a hosted iOS
+app links the hosted XCFramework alone to avoid duplicate core symbols.
 
 ## Documentation Requirements
 

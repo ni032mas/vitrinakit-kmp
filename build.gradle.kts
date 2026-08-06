@@ -36,12 +36,6 @@ private val moduleProjectPaths = setOf(
     ":vitrinakit-hosted",
     ":vitrinakit-rustore",
 )
-private val moduleArtifactIds = setOf(
-    "vitrinakit-kmp-sdk",
-    "vitrinakit-googleplay",
-    "vitrinakit-hosted",
-    "vitrinakit-rustore",
-)
 private val coreArtifactIds = setOf(
     "vitrinakit-kmp-sdk",
     "vitrinakit-kmp-sdk-jvm",
@@ -53,6 +47,8 @@ private val expectedArtifactBaseIds = coreArtifactIds + setOf(
     "vitrinakit-googleplay-android",
     "vitrinakit-hosted",
     "vitrinakit-hosted-android",
+    "vitrinakit-hosted-iosarm64",
+    "vitrinakit-hosted-iossimulatorarm64",
     "vitrinakit-hosted-jvm",
     "vitrinakit-rustore",
     "vitrinakit-rustore-android",
@@ -73,9 +69,6 @@ private val vitrinaKitPublicationSuffix = when (vitrinaKitPublicationName) {
 private val requiredArtifactIds = expectedArtifactBaseIds.map { artifactId ->
     "$artifactId$vitrinaKitPublicationSuffix"
 }.toSet()
-private val requiredModuleArtifactIds = moduleArtifactIds.map { artifactId ->
-    "$artifactId$vitrinaKitPublicationSuffix"
-}.toSet()
 private val requiredCoreArtifactIds = coreArtifactIds.map { artifactId ->
     "$artifactId$vitrinaKitPublicationSuffix"
 }.toSet()
@@ -93,6 +86,12 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
 
     @get:Input
     abstract val providerArtifactIds: ListProperty<String>
+
+    @get:Input
+    abstract val hostedAppleArtifactIds: ListProperty<String>
+
+    @get:Input
+    abstract val coreAppleArtifactIds: ListProperty<String>
 
     @get:Input
     abstract val googlePlayAndroidArtifactId: Property<String>
@@ -123,10 +122,40 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
             if (!artifactDirectory.isDirectory) {
                 throw GradleException("Missing published artifact directory: $artifactDirectory")
             }
-            if (artifactDirectory.walkTopDown().none { file -> file.extension == "pom" }) {
-                throw GradleException("Missing POM for published artifact: $artifactId")
+            val artifactFiles = artifactDirectory.walkTopDown().filter { file -> file.isFile }.toList()
+            val requiredFileKinds = mapOf(
+                "POM" to artifactFiles.count { file -> file.extension == "pom" },
+                "Gradle module metadata" to artifactFiles.count { file -> file.extension == "module" },
+                "sources JAR" to artifactFiles.count { file -> file.name.endsWith("-sources.jar") },
+            )
+            requiredFileKinds.forEach { (kind, count) ->
+                if (count != 1) {
+                    throw GradleException(
+                        "Expected one $kind for published artifact $artifactId, found $count: " +
+                            artifactDirectory,
+                    )
+                }
             }
         }
+
+        val hostedAppleArtifactIds = hostedAppleArtifactIds.get()
+        val coreAppleArtifactIds = coreAppleArtifactIds.get()
+        if (hostedAppleArtifactIds.size != coreAppleArtifactIds.size) {
+            throw GradleException("Hosted and core Apple artifact contracts must have the same size.")
+        }
+        hostedAppleArtifactIds.zip(coreAppleArtifactIds)
+            .forEach { (hostedArtifactId, coreArtifactId) ->
+                val hostedPomDirectory = repository.resolve("ru/vitrina/$hostedArtifactId")
+                val hostedPom = hostedPomDirectory.walkTopDown()
+                    .single { file -> file.extension == "pom" }
+                    .readText()
+                if (!hostedPom.contains("<artifactId>$coreArtifactId</artifactId>")) {
+                    throw GradleException(
+                        "Hosted Apple artifact $hostedArtifactId must depend on matching core " +
+                            "artifact $coreArtifactId: $hostedPomDirectory",
+                    )
+                }
+            }
 
         val providerArtifactIds = providerArtifactIds.get()
         coreArtifactIds.get().forEach { coreArtifactId ->
@@ -374,11 +403,20 @@ tasks.register("verifyModuleTopology") {
                 .orEmpty()
         }
         val omittedPublication = providers.gradleProperty("vitrinaKitTopologyOmitPublication").orNull
-        val effectivePublications = publications.filterNot { artifactId -> artifactId == omittedPublication }
-        val missingPublications = requiredModuleArtifactIds - effectivePublications.toSet()
-        if (missingPublications.isNotEmpty()) {
+        val additionalPublication = providers.gradleProperty(
+            "vitrinaKitTopologyAddPublication",
+        ).orNull
+        val effectivePublicationIds = (
+            publications.filterNot { artifactId -> artifactId == omittedPublication } +
+                listOfNotNull(additionalPublication)
+            ).toSet()
+        val missingPublications = requiredArtifactIds - effectivePublicationIds
+        val unexpectedPublications = effectivePublicationIds - requiredArtifactIds
+        if (missingPublications.isNotEmpty() || unexpectedPublications.isNotEmpty()) {
             throw GradleException(
-                "Missing SDK root publications: ${missingPublications.sorted().joinToString()}",
+                "SDK publication topology mismatch. " +
+                    "Missing: ${missingPublications.sorted().joinToString().ifEmpty { "none" }}; " +
+                    "unexpected: ${unexpectedPublications.sorted().joinToString().ifEmpty { "none" }}.",
             )
         }
         if (publications.size != publications.toSet().size) {
@@ -537,6 +575,18 @@ tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
     repositoryDirectory.set(layout.buildDirectory.dir("repository"))
     coreArtifactIds.set(requiredCoreArtifactIds.sorted())
     providerArtifactIds.set(requiredProviderArtifactIds.sorted())
+    hostedAppleArtifactIds.set(
+        listOf(
+            "vitrinakit-hosted-iosarm64$vitrinaKitPublicationSuffix",
+            "vitrinakit-hosted-iossimulatorarm64$vitrinaKitPublicationSuffix",
+        ),
+    )
+    coreAppleArtifactIds.set(
+        listOf(
+            "vitrinakit-kmp-sdk-iosarm64$vitrinaKitPublicationSuffix",
+            "vitrinakit-kmp-sdk-iossimulatorarm64$vitrinaKitPublicationSuffix",
+        ),
+    )
     googlePlayAndroidArtifactId.set("vitrinakit-googleplay-android$vitrinaKitPublicationSuffix")
     googlePlayBillingVersion.set(rootProject.extra["googlePlayBillingVersion"] as String)
     kotlinxCoroutinesVersion.set(rootProject.extra["kotlinxCoroutinesVersion"] as String)
@@ -584,6 +634,20 @@ tasks.register("verifyReleaseArtifactContract") {
             if (releaseTask.providerArtifactIds.get().toSet() != requiredProviderArtifactIds) {
                 add("Release verification must reject every provider root and target artifact ID.")
             }
+            val expectedHostedAppleArtifactIds = setOf(
+                "vitrinakit-hosted-iosarm64$vitrinaKitPublicationSuffix",
+                "vitrinakit-hosted-iossimulatorarm64$vitrinaKitPublicationSuffix",
+            )
+            if (releaseTask.hostedAppleArtifactIds.get().toSet() != expectedHostedAppleArtifactIds) {
+                add("Release verification must inspect every hosted Apple target POM.")
+            }
+            val expectedCoreAppleArtifactIds = setOf(
+                "vitrinakit-kmp-sdk-iosarm64$vitrinaKitPublicationSuffix",
+                "vitrinakit-kmp-sdk-iossimulatorarm64$vitrinaKitPublicationSuffix",
+            )
+            if (releaseTask.coreAppleArtifactIds.get().toSet() != expectedCoreAppleArtifactIds) {
+                add("Release verification must match hosted and core Apple target dependencies.")
+            }
 
             val generatedConfigPath = "generated/vitrinakit-publication-config/$vitrinaKitPublicationName/commonMain/kotlin/" +
                 "ru/vitrina/sdk/VitrinaKitPublicationConfig.kt"
@@ -608,6 +672,51 @@ tasks.register("verifyReleaseArtifactContract") {
 
 tasks.register("assembleVitrinaKitXCFramework") {
     group = "build"
-    description = "Builds the VitrinaKit iOS XCFramework from the core SDK."
-    dependsOn(":vitrinakit-core:assembleVitrinaKitXCFramework")
+    description = "Builds the core and hosted VitrinaKit iOS XCFrameworks."
+    dependsOn(
+        ":vitrinakit-core:assembleVitrinaKitXCFramework",
+        ":vitrinakit-hosted:assembleVitrinaKitHostedXCFramework",
+    )
+
+    doLast {
+        val expectedFrameworks = listOf(
+            project(":vitrinakit-core").layout.buildDirectory.dir(
+                "XCFrameworks/release/VitrinaKit.xcframework",
+            ).get().asFile,
+            project(":vitrinakit-hosted").layout.buildDirectory.dir(
+                "XCFrameworks/release/VitrinaKitHosted.xcframework",
+            ).get().asFile,
+        )
+        val missingFrameworks = expectedFrameworks.filterNot { framework -> framework.isDirectory }
+        if (missingFrameworks.isNotEmpty()) {
+            throw GradleException(
+                "Missing release XCFrameworks: ${missingFrameworks.joinToString()}",
+            )
+        }
+
+        val hostedFramework = expectedFrameworks.last()
+        val hostedHeaders = listOf(
+            "ios-arm64/VitrinaKitHosted.framework/Headers/VitrinaKitHosted.h",
+            "ios-arm64-simulator/VitrinaKitHosted.framework/Headers/VitrinaKitHosted.h",
+        ).map { relativePath -> hostedFramework.resolve(relativePath) }
+        hostedHeaders.forEach { header ->
+            if (!header.isFile) {
+                throw GradleException("Missing hosted XCFramework public header: $header")
+            }
+            val headerText = header.readText()
+            val requiredSwiftNames = listOf(
+                "swift_name(\"HostedCheckoutAdapter\")",
+                "swift_name(\"VitrinaKit\")",
+            )
+            val missingSwiftNames = requiredSwiftNames.filterNot { swiftName ->
+                headerText.contains(swiftName)
+            }
+            if (missingSwiftNames.isNotEmpty()) {
+                throw GradleException(
+                    "Hosted XCFramework must export hosted and core APIs; missing " +
+                        "${missingSwiftNames.joinToString()} in $header",
+                )
+            }
+        }
+    }
 }

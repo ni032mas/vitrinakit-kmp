@@ -102,6 +102,19 @@ launcher. A return/deep link is only a signal to refresh authoritative state;
 navigation never proves payment. Persist only `HostedCheckoutResumeState` using
 platform-protected storage. Do not persist checkout URLs or receipt addresses.
 
+On iOS, build the hosted binary with:
+
+```bash
+./gradlew assembleVitrinaKitXCFramework
+```
+
+Link `vitrinakit-hosted/build/XCFrameworks/release/VitrinaKitHosted.xcframework`
+and `import VitrinaKitHosted`. It exports both `HostedCheckoutAdapter` and the
+core VitrinaKit API, so do not also link `VitrinaKit.xcframework` into that app
+target. The standalone core framework remains available at
+`vitrinakit-core/build/XCFrameworks/release/VitrinaKit.xcframework` for custom
+adapter integrations.
+
 ## RuStore Pay
 
 Use `vitrinakit-rustore`. RC 0.1.0-rc.7 integrates RuStore Pay 11.0.0 through

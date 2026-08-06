@@ -39,7 +39,12 @@ vitrinakit-rustore/
   src/androidUnitTest/kotlin/ru/vitrina/sdk/rustore/
 ```
 
-The repository root remains the build/release aggregator. `vitrinakit-core` produces Maven metadata and the `VitrinaKit` XCFramework. Android provider modules publish separate Maven artifacts and depend on core without re-exporting store SDK types.
+The repository root remains the build/release aggregator. `vitrinakit-core`
+produces Maven metadata and the standalone `VitrinaKit` XCFramework.
+`vitrinakit-hosted` publishes JVM, Android, and Apple targets plus a
+`VitrinaKitHosted` XCFramework that exports core for one-framework iOS
+integration. Google Play and RuStore publish Android artifacts and depend on
+core without re-exporting store SDK types.
 
 ## Task 1: Split Release Artifacts Without Breaking Core (#16)
 
@@ -61,7 +66,11 @@ The repository root remains the build/release aggregator. `vitrinakit-core` prod
 - [ ] **Step 2: Run `./gradlew verifyModuleTopology`.** Expect failure because the subprojects do not exist.
 - [ ] **Step 3: Move existing source history into core and include subprojects.** Preserve public package names so existing imports remain source-compatible.
 - [ ] **Step 4: Extract publication conventions.** Keep production/development artifact suffix behavior, generated environment config, Dokka rules, local build repository, GitHub Packages credentials lookup, and publication metadata consistent across modules.
-- [ ] **Step 5: Configure targets.** Core: JVM, iOS arm64/simulator arm64, XCFramework. Hosted: JVM/Android-compatible KMP common code. Google/RuStore: Android library targets with unit tests. Provider dependencies use `implementation`, not `api`.
+- [ ] **Step 5: Configure targets.** Core: JVM, iOS arm64/simulator arm64,
+  standalone XCFramework. Hosted: JVM, Android, iOS arm64/simulator arm64, plus
+  an XCFramework that exports core. Google/RuStore: Android library targets
+  with unit tests. Provider dependencies use `implementation`, except hosted's
+  public core API/export required by its single-framework Apple distribution.
 - [ ] **Step 6: Recreate root lifecycle tasks.** `test`, `verifySdk`, `verifyReleaseArtifacts`, and `assembleVitrinaKitXCFramework` aggregate the correct subproject tasks. `verifyReleaseArtifacts` must inspect the local Maven repository for all expected artifacts and POM dependency isolation.
 - [ ] **Step 7: Run `./gradlew verifyModuleTopology :vitrinakit-core:jvmTest assembleVitrinaKitXCFramework`.** Expect PASS with unchanged core behavior.
 - [ ] **Step 8: Commit.** `git commit -m "build: split core and provider artifacts (#16)"`

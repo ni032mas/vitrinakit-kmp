@@ -10,6 +10,8 @@ Provider-neutral purchase adapter release candidate.
   success, pending, cancellation, and privacy-safe failures.
 - Isolated hosted checkout, Google Play Billing 9.1.0, and RuStore Pay 11.0.0
   adapter artifacts.
+- Hosted checkout iOS device and simulator publications, plus a
+  `VitrinaKitHosted.xcframework` that exports the core API and hosted adapter.
 - Foreground query recovery, explicit restore catalog mappings, and
   subscriber-scoped lifecycle cleanup.
 - Executable Android flavor sample for Google Play and hosted compositions.
@@ -22,7 +24,8 @@ Provider-neutral purchase adapter release candidate.
 - Hosted-shaped `makePurchase` overloads are deprecated for the 0.1 RC
   migration line.
 - Release verification now enforces complete publication topology, provider
-  dependency isolation, sample adapter cardinality, and flavor graph purity.
+  dependency isolation, Apple target dependencies, sample adapter cardinality,
+  and flavor graph purity.
 
 ### Release Channel
 

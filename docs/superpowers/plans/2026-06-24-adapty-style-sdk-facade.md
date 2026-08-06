@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a complete Adapty-style static `VitrinaKit` SDK facade and update LitoFit to consume it instead of owning SDK transport glue.
+**Goal:** Add a complete Adapty-style static `VitrinaKit` SDK facade so consumer applications no longer own SDK transport glue.
 
-**Architecture:** Keep the existing low-level `VitrinaClient` request implementation, add public `VitrinaKit*` model names and a singleton facade over the client. Add default SDK-owned transport creation where the current KMP target set supports it, with injected transport preserved for tests and advanced consumers. LitoFit keeps only product-specific mapping logic in `VitrinaSubscriptionGateway`.
+**Architecture:** Keep the existing low-level `VitrinaClient` request implementation, add public `VitrinaKit*` model names and a singleton facade over the client. Add default SDK-owned transport creation where the current KMP target set supports it, with injected transport preserved for tests and advanced consumers. Consumer applications keep only product-specific domain mapping.
 
-**Tech Stack:** Kotlin Multiplatform, kotlinx.serialization, kotlinx.coroutines, Ktor transport boundary, kotlin.test, Koin in LitoFit.
+**Tech Stack:** Kotlin Multiplatform, kotlinx.serialization, kotlinx.coroutines, Ktor transport boundary, kotlin.test.
 
 ---
 
@@ -19,10 +19,8 @@
 - SDK modify `build.gradle.kts`: add Ktor client dependencies needed by the default transport.
 - SDK modify `src/commonTest/kotlin/ru/vitrina/sdk/VitrinaClientTest.kt`: retain low-level tests and add facade tests.
 - SDK modify `README.md`: document Adapty-style activation and methods.
-- LitFit delete `features/subscription/src/commonMain/kotlin/ru/litofit/features/subscription/data/vitrina/KtorVitrinaHttpClient.kt`.
-- LitFit modify `features/subscription/src/commonMain/kotlin/ru/litofit/features/subscription/di/SubscriptionModule.kt`: remove `VitrinaHttpClient` binding and construct/configure SDK facade-compatible gateway.
-- LitFit modify `features/subscription/src/commonMain/kotlin/ru/litofit/features/subscription/data/vitrina/VitrinaSubscriptionGateway.kt`: call facade-compatible API and keep LitoFit-specific mapping.
-- LitFit modify tests under `features/subscription/src/commonTest/kotlin/ru/litofit/features/subscription/` that import `VitrinaClient`, `VitrinaConfig`, or `VitrinaHttpClient`.
+- Downstream consumer migrations remain in their own repositories; this public
+  plan documents only the SDK contract they consume.
 
 ## Task 1: SDK Facade Tests
 
@@ -225,36 +223,35 @@ Run: `./gradlew verifySdk`
 
 Expected: PASS.
 
-## Task 5: LitoFit Consumer Update
+## Task 5: Consumer Migration Guidance
 
 **Files:**
-- Delete: `features/subscription/src/commonMain/kotlin/ru/litofit/features/subscription/data/vitrina/KtorVitrinaHttpClient.kt`
-- Modify: `features/subscription/src/commonMain/kotlin/ru/litofit/features/subscription/di/SubscriptionModule.kt`
-- Modify: `features/subscription/src/commonMain/kotlin/ru/litofit/features/subscription/data/vitrina/VitrinaSubscriptionGateway.kt`
-- Modify: relevant tests importing low-level SDK transport/client types.
+- Modify: `README.md`
 
-- [ ] **Step 1: Write failing LitFit tests for facade-based gateway wiring**
+- [ ] **Step 1: Document facade-based consumer wiring**
 
-Update tests so gateway construction no longer imports or instantiates `KtorVitrinaHttpClient`.
+Show activation, paywall, purchase, and profile calls without an app-owned SDK
+transport.
 
-- [ ] **Step 2: Run subscription tests and verify failure**
+- [ ] **Step 2: Run documentation verification**
 
-Run from `/Users/marmyshevas/projects/LitoFit`: `./gradlew :features:subscription:allTests`
+Run: `./gradlew verifySdk`
 
-Expected: FAIL until DI/gateway are updated.
+Expected: PASS.
 
-- [ ] **Step 3: Update DI and gateway**
+- [ ] **Step 3: Publish consumer migration notes**
 
-Remove `VitrinaHttpClient` binding and use the new SDK facade-compatible API.
+State that downstream application migrations and tests remain in their own
+repositories.
 
-- [ ] **Step 4: Run LitFit subscription tests**
+- [ ] **Step 4: Run SDK verification**
 
-Run: `./gradlew :features:subscription:allTests`
+Run: `./gradlew verifySdk`
 
 Expected: PASS.
 
 ## Final Verification
 
 - [ ] Run from SDK repo: `./gradlew verifySdk`
-- [ ] Run from LitoFit repo: `./gradlew :features:subscription:allTests`
-- [ ] Run from LitoFit repo: `./gradlew detekt`
+- [ ] Confirm public documentation contains no downstream repository paths or
+  private issue references.

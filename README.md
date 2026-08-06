@@ -1,22 +1,18 @@
 # VitrinaKit KMP SDK
 
-Kotlin Multiplatform SDK for VitrinaKit mobile subscription integrations.
+Kotlin Multiplatform SDK for identity-bound mobile subscriptions with hosted
+checkout, Google Play Billing, and RuStore Pay adapters.
 
-## Status
+## Release candidate
 
-This package is published from the public `ni032mas/vitrinakit-kmp`
-repository to its own GitHub Packages Maven registry.
-
-## Version
-
-Current release candidate: `0.1.0-rc.6`.
-
-SDK versions are changed only as part of a release task. Do not bump `version`
-in `build.gradle.kts` for normal feature work.
+Current release candidate: `0.1.0-rc.7`. The source and local release artifacts
+are ready for validation; publishing remains a separate, explicitly approved
+release operation.
 
 ## Install
 
-LitoFit uses GitHub Packages for the first private release channel.
+Add the VitrinaKit GitHub Packages repository. Keep package credentials outside
+source control and mobile binaries.
 
 ```kotlin
 repositories {
@@ -27,209 +23,172 @@ repositories {
         }
     }
 }
+```
 
+Every application artifact installs the core plus exactly one adapter. For a
+single-provider Android application, use one valid dependency block such as:
+
+```kotlin
 dependencies {
-    implementation("ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.6")
+    implementation("ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.7")
+    implementation("ru.vitrina:vitrinakit-googleplay:0.1.0-rc.7")
 }
 ```
 
-Use `vitrinakit-kmp-sdk` for production integrations. Use
-`vitrinakit-kmp-sdk-dev` for development integrations that must call the
-development VitrinaKit API endpoint. The API URL is compiled into the published
-SDK artifact and is not configured by mobile application code.
+Use `vitrinakit-rustore` instead of the hosted or Google Play artifact in a
+build that is distributed through RuStore. Do not package multiple adapters in
+one artifact. Development coordinates append `-dev` to each artifact ID and
+use the development VitrinaKit API compiled into the SDK.
 
-Use a GitHub token with package read access for `gpr.key`. Do not put tokens in
-source files, docs, build logs, or mobile application code.
+For separate Google Play and hosted application variants, declare the flavors
+before using their generated dependency configurations:
+
+```kotlin
+android {
+    flavorDimensions += "billing"
+    productFlavors {
+        create("global") { dimension = "billing" }
+        create("ru") { dimension = "billing" }
+    }
+}
+
+dependencies {
+    implementation("ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.7")
+    "globalImplementation"("ru.vitrina:vitrinakit-googleplay:0.1.0-rc.7")
+    "ruImplementation"("ru.vitrina:vitrinakit-hosted:0.1.0-rc.7")
+}
+```
+
+The [executable flavor sample](samples/android-flavors) contains the complete
+Android module and provider factories.
 
 ## Quickstart
 
-Activate the SDK once with the public API key from VitrinaKit. Do not pass
-secret API keys or provider credentials to mobile apps.
+Create the provider adapter in the application composition root, then activate
+the SDK once. Feature code receives the finished `VitrinaKitConfig`; it does not
+import provider packages.
 
 ```kotlin
-import ru.vitrina.sdk.VitrinaKit
-import ru.vitrina.sdk.VitrinaKitConfig
-import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
-import ru.vitrina.sdk.model.VitrinaKitError
-import ru.vitrina.sdk.model.VitrinaKitResult
+val config = VitrinaKitConfig.Builder("PUBLIC_API_KEY")
+    .withPurchaseAdapter(createArtifactPurchaseAdapter())
+    .build()
 
-VitrinaKit.activate(
-    VitrinaKitConfig.Builder("PUBLIC_API_KEY").build(),
-)
-
-val paywallResult = VitrinaKit.getPaywall(
-    placementId = "main",
-    userId = externalUserId,
-)
-
-when (paywallResult) {
-    is VitrinaKitResult.Success -> {
-        val paywall = paywallResult.value
-        val products = VitrinaKit.getPaywallProducts(paywall)
-        // Render products in your paywall UI.
-    }
-    is VitrinaKitResult.Failure -> {
-        // Show a retry or fallback state.
-    }
+when (VitrinaKit.activate(config)) {
+    is VitrinaKitResult.Success -> Unit
+    is VitrinaKitResult.Failure -> showConfigurationError()
 }
 ```
 
-Start hosted checkout for the selected product:
+Hosted checkout uses `withHostedCheckoutAdapter(...)` instead. Activation
+rejects a blank publishable key and any configuration with zero or multiple
+adapters.
+
+After the user signs in, the application backend exchanges that application
+session for a short-lived trusted subscriber token. Pass it directly to
+`identify`; never persist or log it in the app.
 
 ```kotlin
-val purchaseResult = VitrinaKit.makePurchase(
-    product = selectedProduct,
-    userId = externalUserId,
-    receiptEmail = "buyer@example.com",
-    returnUrl = "myapp://subscription/return",
-)
-```
+val subscriberToken = customerBackend.fetchTrustedSubscriberToken()
 
-`receiptEmail` is required for checkout receipt delivery. The returned
-`confirmationUrl` is the hosted provider checkout URL. If `reused` is `true`,
-the SDK received an existing open checkout session instead of creating a new
-provider payment.
+when (
+    VitrinaKit.identify(
+        VitrinaKitIdentity.TrustedToken(subscriberToken),
+    )
+) {
+    is VitrinaKitResult.Success -> Unit
+    is VitrinaKitResult.Failure -> showIdentityError()
+}
 
-Consumer apps can distinguish public checkout validation and state errors:
+val paywall = when (val result = VitrinaKit.getPaywall("main")) {
+    is VitrinaKitResult.Success -> result.value
+    is VitrinaKitResult.Failure -> return showPaywallError()
+}
 
-```kotlin
-when (val result = purchaseResult) {
-    is VitrinaKitResult.Success -> openHostedCheckout(result.value.confirmationUrl)
-    is VitrinaKitResult.Failure -> when (val error = result.error) {
-        is VitrinaKitError.Checkout -> when (error.code) {
-            VitrinaCheckoutErrorCode.RECEIPT_EMAIL_REQUIRED -> showReceiptEmailRequired()
-            VitrinaCheckoutErrorCode.INVALID_RECEIPT_EMAIL -> showInvalidReceiptEmail()
-            VitrinaCheckoutErrorCode.ACTIVE_SUBSCRIPTION_EXISTS -> refreshProfile()
-        }
-        else -> showCheckoutError()
-    }
+when (val result = VitrinaKit.purchase(paywall.products.first())) {
+    is VitrinaKitPurchaseResult.Success -> renderAccess(result.profile)
+    is VitrinaKitPurchaseResult.Pending -> showPendingState()
+    VitrinaKitPurchaseResult.Cancelled -> keepCurrentScreen()
+    is VitrinaKitPurchaseResult.Failure -> showPurchaseError(result.error)
 }
 ```
 
-Refresh the subscriber profile after checkout return, app launch, or restore:
+`Success` always contains a server-confirmed profile. A store callback, hosted
+redirect, or cached state never grants access by itself.
+
+Restore and foreground recovery are provider-neutral:
 
 ```kotlin
-val profileResult = VitrinaKit.getProfile(userId = externalUserId)
+val restore = VitrinaKit.restorePurchases()
+
+// Call from the app's foreground lifecycle callback.
+val recoveredPurchase = VitrinaKit.onForeground()
+
+// Call when the application account signs out.
+VitrinaKit.logout()
 ```
 
-Blocking wrappers are available for JVM/Android call sites that cannot call
-suspend functions:
+Only log stable error code, retryability, and opaque support reference. Do not
+log identity values, provider evidence, checkout URLs, or provider payloads.
 
-```kotlin
-val profileResult = VitrinaKit.getProfileBlocking(userId = externalUserId)
-```
+## Guides
 
-Advanced integrations and tests can inject a custom transport:
+- [Identity and account lifecycle](docs/identity.md)
+- [Purchase adapters, restore, and provider setup](docs/purchases.md)
+- [Migration from hosted `makePurchase`](docs/migration-provider-neutral-purchases.md)
+- [RC 0.1.0-rc.7 API compatibility report](docs/api-compatibility-0.1.0-rc.7.md)
+- [Executable Android flavor sample](samples/android-flavors)
 
-```kotlin
-VitrinaKit.activate(
-    VitrinaKitConfig.Builder("PUBLIC_API_KEY")
-        .withHttpClient(customTransport)
-        .build(),
-)
-```
+Runtime country, locale, SIM, IP address, or device language never changes the
+billing provider. Provider selection is a build/composition decision.
 
 ## Verify
 
 ```bash
-./gradlew verifySdk
-```
-
-The verification task runs the JVM SDK tests and Dokka documentation generation
-with warnings treated as failures.
-
-Repository-level verification is also available:
-
-```bash
+./gradlew verifySdk verifyReleaseArtifacts assembleVitrinaKitXCFramework
 make verify
 ```
 
-This runs the security gate and local release dry run.
+The gates run all SDK tests, compile both sample flavors, generate Dokka with
+warnings as failures, inspect local Maven metadata and provider isolation, build
+the core and hosted XCFrameworks, and scan for secrets.
 
-## Development Workflow
+Production dry-run artifacts are written below `build/repository`. For example,
+the core root publication is
+`build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.7/`. Run with
+`-PvitrinaKitPublication=development` to verify the `-dev` artifact family.
 
-`dev` is the default integration branch. `main` is stable and release-only.
-Create short feature branches from `dev`, open pull requests back into `dev`,
-and reserve `main` updates for release PRs.
+## Development workflow
 
-Install repository-managed git hooks before committing:
+`dev` is the integration branch and `main` is release-only. Work on a feature
+branch, run `make verify`, and open a pull request into `dev`.
 
 ```bash
 make install-git-hooks
 ```
 
-The hooks require `gitleaks`. The pre-commit hook scans staged changes for
-secrets and blocks direct commits to `dev`/`main`. The commit-msg hook enforces
-Conventional Commits, the pre-merge-commit hook protects `main`, and the
-pre-push hook blocks protected-branch rewrites and runs a full `make verify`.
+## Publishing
 
-## Release Dry Run
-
-```bash
-./gradlew verifyReleaseArtifacts
-```
-
-Expected output:
-
-- SDK JVM tests pass;
-- Dokka documentation is generated;
-- Maven/KMP artifacts are written under `build/repository`;
-- no GitHub Packages credentials are required.
-
-The production dry-run repository should contain the root multiplatform
-publication at
-`build/repository/ru/vitrina/vitrinakit-kmp-sdk/0.1.0-rc.6/` and target
-publications such as JVM/iOS variants with Kotlin-generated artifact suffixes.
-The development dry-run uses `-PvitrinaKitPublication=development` and writes
-the root publication to
-`build/repository/ru/vitrina/vitrinakit-kmp-sdk-dev/0.1.0-rc.6/`.
-
-## Publish
-
-Real publication uses the `GitHubPackages` Gradle repository. Prefer the
-manual `Publish KMP SDK` GitHub Actions workflow and pass the exact SDK
-version. The workflow publishes both production and development SDK artifacts:
-
-- `ru.vitrina:vitrinakit-kmp-sdk:<version>` uses
-  `https://api.vitrinakit.ru`;
-- `ru.vitrina:vitrinakit-kmp-sdk-dev:<version>` uses
-  `https://api.dev.vitrinakit.ru`.
-
-The workflow publishes from `ni032mas/vitrinakit-kmp` to that repository's own
-GitHub Packages registry using the built-in `GITHUB_TOKEN` and
-`permissions: packages: write`. No cross-repository PAT is required.
-
-Local publication is also possible when a package token is available:
-
-```bash
-GITHUB_ACTOR=<github-user> GITHUB_TOKEN=<package-token> \
-  ./gradlew publishAllPublicationsToGitHubPackagesRepository
-```
-
-For local development artifact publication, add
-`-PvitrinaKitPublication=development` or set
-`VITRINAKIT_PUBLICATION=development`.
-
-Publication tasks depend on `verifySdk`.
-
-## Documentation
-
-```bash
-./gradlew dokkaGenerate
-```
-
-Generated API documentation is written to `build/dokka/html`.
+Publishing is intentionally separate from RC preparation. Use the manual
+`Publish KMP SDK` workflow only after release approval. Local publishing needs
+package credentials supplied through the environment; never put them in source,
+documentation, logs, or mobile code.
 
 ## iOS
 
-The SDK exposes iOS frameworks for `iosArm64` and `iosSimulatorArm64`.
+Core and hosted checkout expose `iosArm64` and `iosSimulatorArm64` frameworks:
 
 ```bash
 ./gradlew assembleVitrinaKitXCFramework
 ```
 
-The release artifact is written to
-`build/XCFrameworks/release/VitrinaKit.xcframework`.
+The command produces:
 
-Use the Maven/KMP dependency for normal LitoFit integration. Build the
-XCFramework only when an iOS consumer needs a direct native framework artifact.
+- `vitrinakit-core/build/XCFrameworks/release/VitrinaKit.xcframework` for a
+  custom adapter or core-only integration;
+- `vitrinakit-hosted/build/XCFrameworks/release/VitrinaKitHosted.xcframework`
+  for hosted checkout.
+
+The hosted framework exports the core public API. Link it by itself and use
+`import VitrinaKitHosted` for hosted checkout; do not also link the core
+framework into the same app target. Google Play and RuStore adapters are
+Android-only.

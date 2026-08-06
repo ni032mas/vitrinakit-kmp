@@ -1,13 +1,14 @@
-.PHONY: help verify security test docs release-dry-run xcframework install-git-hooks clean
+.PHONY: help verify security test sample docs release-dry-run xcframework install-git-hooks clean
 
 help:
 	@printf '%s\n' 'VitrinaKit KMP SDK commands:'
 	@printf '%s\n' '  make verify             Run security checks and release dry-run'
 	@printf '%s\n' '  make security           Run secret and optional filesystem scanners'
-	@printf '%s\n' '  make test               Run JVM SDK tests'
+	@printf '%s\n' '  make test               Run all SDK unit tests'
+	@printf '%s\n' '  make sample             Compile and inspect Android flavor variants'
 	@printf '%s\n' '  make docs               Generate Dokka API docs'
 	@printf '%s\n' '  make release-dry-run    Build local Maven/KMP artifacts'
-	@printf '%s\n' '  make xcframework        Build the iOS XCFramework'
+	@printf '%s\n' '  make xcframework        Build core and hosted iOS XCFrameworks'
 	@printf '%s\n' '  make install-git-hooks  Install repository-managed git hooks'
 
 verify: security release-dry-run
@@ -18,8 +19,11 @@ security:
 test:
 	./gradlew test
 
+sample:
+	./gradlew verifyAndroidFlavorSample
+
 docs:
-	./gradlew dokkaGenerate
+	./gradlew :vitrinakit-core:dokkaGenerate :vitrinakit-googleplay:dokkaGenerate :vitrinakit-hosted:dokkaGenerate :vitrinakit-rustore:dokkaGenerate
 
 release-dry-run:
 	./gradlew verifyReleaseArtifacts

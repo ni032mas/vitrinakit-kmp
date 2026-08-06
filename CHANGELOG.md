@@ -1,5 +1,43 @@
 # VitrinaKit KMP SDK Changelog
 
+## 0.1.0-rc.7
+
+Provider-neutral purchase adapter release candidate.
+
+### Added
+
+- Identity-bound core purchase and restore APIs with server-authoritative
+  success, pending, cancellation, and privacy-safe failures.
+- Isolated hosted checkout, Google Play Billing 9.1.0, and RuStore Pay 11.0.0
+  adapter artifacts.
+- Hosted checkout iOS device and simulator publications, plus a
+  `VitrinaKitHosted.xcframework` that exports the core API and hosted adapter.
+- Foreground query recovery, explicit restore catalog mappings, and
+  subscriber-scoped lifecycle cleanup.
+- Executable Android flavor sample for Google Play and hosted compositions.
+- Public identity, purchase, migration, provider setup, and sandbox guides.
+
+### Changed
+
+- Feature code now calls `identify`, `purchase(product)`, and
+  `restorePurchases()` without provider-specific purchase parameters.
+- Hosted-shaped `makePurchase` overloads are deprecated for the 0.1 RC
+  migration line.
+- Release verification now enforces complete publication topology, provider
+  dependency isolation, Apple target dependencies, sample adapter cardinality,
+  and flavor graph purity.
+
+### Release Channel
+
+- Core production coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.7`.
+- Provider production coordinates:
+  `ru.vitrina:vitrinakit-hosted:0.1.0-rc.7`,
+  `ru.vitrina:vitrinakit-googleplay:0.1.0-rc.7`, and
+  `ru.vitrina:vitrinakit-rustore:0.1.0-rc.7`.
+- Development artifacts append `-dev` to every artifact ID.
+- Publishing is not part of this source RC commit.
+
 ## 0.1.0-rc.6
 
 Checkout receipt and open-session reuse release candidate.

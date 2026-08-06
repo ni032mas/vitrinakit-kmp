@@ -6,12 +6,18 @@
 package ru.vitrina.sdk.googleplay
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.Executors
+import java.util.concurrent.ConcurrentLinkedQueue
+import kotlin.coroutines.CoroutineContext
 import ru.vitrina.sdk.purchase.VitrinaKitAdapterPurchaseResult
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseInstruction
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseResumeData
@@ -22,6 +28,70 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class GooglePlayPurchaseAdapterTest {
+    @Test
+    fun backgroundCallerLooksUpActivityAndLaunchesOnConfiguredMainContext() = runTest {
+        val mainExecutor = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "billing-main-test")
+        }
+        val mainDispatcher = mainExecutor.asCoroutineDispatcher()
+        val activityLookupThreads = Channel<String>(capacity = Channel.UNLIMITED)
+        val gateway = FakeBillingGateway(products = listOf(baseProduct()))
+        val adapter = GooglePlayPurchaseAdapter(
+            packageName = PACKAGE_NAME,
+            activityHandleProvider = {
+                activityLookupThreads.trySend(Thread.currentThread().name)
+                BillingActivityHandle(ActivityMarker)
+            },
+            restoreReferenceResolver = resolver(),
+            gatewayFactory = { gateway },
+            launchDispatcher = mainDispatcher,
+        )
+
+        try {
+            val cancelled = async(Dispatchers.Default) { adapter.present(instruction()) }
+            assertTrue(activityLookupThreads.receive().startsWith("billing-main-test"))
+            assertTrue(gateway.launchThreads.receive().startsWith("billing-main-test"))
+            cancelled.cancelAndJoin()
+
+            val completed = async(Dispatchers.Default) { adapter.present(instruction()) }
+            assertTrue(activityLookupThreads.receive().startsWith("billing-main-test"))
+            assertTrue(gateway.launchThreads.receive().startsWith("billing-main-test"))
+            gateway.emit(purchased(TOKEN_ONE))
+
+            assertEquals(
+                TOKEN_ONE,
+                proofValue(assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(completed.await())),
+            )
+            assertEquals(2, gateway.launches.size)
+        } finally {
+            adapter.close()
+            mainDispatcher.close()
+            mainExecutor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun cancellationBeforeMainLaunchClearsWaiterWithoutLaunchingUi() = runTest {
+        val gateway = FakeBillingGateway(products = listOf(baseProduct()))
+        val launchDispatcher = HoldingDispatcher()
+        val adapter = GooglePlayPurchaseAdapter(
+            packageName = PACKAGE_NAME,
+            activityHandleProvider = { BillingActivityHandle(ActivityMarker) },
+            restoreReferenceResolver = resolver(),
+            gatewayFactory = { gateway },
+            launchDispatcher = launchDispatcher,
+        )
+        val purchase = async(Dispatchers.Default) { adapter.present(instruction()) }
+        launchDispatcher.awaitDispatch()
+
+        purchase.cancel()
+        launchDispatcher.runAll()
+        purchase.join()
+
+        assertFalse(hasActiveWaiter(adapter))
+        assertTrue(gateway.launches.isEmpty())
+    }
+
     @Test
     fun purchaseQueriesFreshDetailsAndSelectsOnlyBasePlanOffer() = runTest {
         val gateway = FakeBillingGateway(
@@ -139,6 +209,25 @@ class GooglePlayPurchaseAdapterTest {
     }
 
     @Test
+    fun itemAlreadyOwnedRecoversQueriedProofInsteadOfFailingLaunch() = runTest {
+        lateinit var gateway: FakeBillingGateway
+        gateway = FakeBillingGateway(
+            products = listOf(baseProduct()),
+            launchCode = BillingResponseCode.ITEM_ALREADY_OWNED,
+            afterLaunch = {
+                gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
+            },
+        )
+
+        val recovered = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(
+            adapter(gateway).present(instruction()),
+        )
+
+        assertEquals(TOKEN_ONE, proofValue(recovered))
+        assertEquals(1, gateway.launches.size)
+    }
+
+    @Test
     fun callbackCancellationAndDisconnectMapExactly() = runTest {
         val cancelledGateway = FakeBillingGateway(products = listOf(baseProduct()))
         val cancelledPurchase = async { adapter(cancelledGateway).present(instruction()) }
@@ -242,7 +331,7 @@ class GooglePlayPurchaseAdapterTest {
         runCurrent()
         gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
 
-        adapter.onForeground()
+        assertEquals(null, adapter.recover(instruction = instruction(), resumeData = null))
         gateway.emit(purchased(TOKEN_ONE))
         val result = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(purchase.await())
 
@@ -252,23 +341,83 @@ class GooglePlayPurchaseAdapterTest {
     }
 
     @Test
-    fun foregroundRecoveryIsCachedUntilOneConsumerAndDeduplicatedByToken() = runTest {
+    fun callbackCompletedActiveWaiterStillOwnsForegroundQueryProof() = runTest {
         val gateway = FakeBillingGateway(products = listOf(baseProduct()))
-        gateway.purchases = listOf(
-            purchasedPurchase(TOKEN_ONE),
-            purchasedPurchase(TOKEN_ONE),
-            purchasedPurchase(TOKEN_TWO),
-        )
+        val adapter = adapter(gateway)
+        val purchase = async { adapter.present(instruction()) }
+        runCurrent()
+        gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
+        gateway.emit(purchased(TOKEN_ONE))
+
+        assertTrue(hasActiveWaiter(adapter))
+        assertEquals(null, adapter.recover(instruction = instruction(), resumeData = null))
+        val result = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(purchase.await())
+
+        assertEquals(TOKEN_ONE, proofValue(result))
+        assertFalse(hasActiveWaiter(adapter))
+    }
+
+    @Test
+    fun foregroundRecoveryReturnsAttemptBoundProofWithoutRawPurchaseCache() = runTest {
+        val gateway = FakeBillingGateway(products = listOf(baseProduct()))
+        gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
         val adapter = adapter(gateway)
 
-        adapter.onForeground()
-        gateway.purchases = emptyList()
-        val restored = adapter.queryRestorablePurchases()
-        val consumed = adapter.queryRestorablePurchases()
+        val recovered = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(
+            adapter.recover(instruction = instruction(), resumeData = null),
+        )
+        adapter.onProofAccepted(recovered.proof)
 
-        assertEquals(2, restored.size)
-        assertEquals(setOf(TOKEN_ONE, TOKEN_TWO), restored.map(::proofValue).toSet())
-        assertTrue(consumed.isEmpty())
+        assertEquals(TOKEN_ONE, proofValue(recovered))
+        assertTrue(adapter.queryRestorablePurchases().isEmpty())
+    }
+
+    @Test
+    fun foregroundRecoveryRetriesFailedQueryAndThrottlesOnlyTheSamePendingAttempt() = runTest {
+        var nowMillis = 1_000L
+        val gateway = FakeBillingGateway(
+            products = listOf(baseProduct()),
+            purchaseQueryCodes = ArrayDeque(
+                listOf(
+                    BillingResponseCode.ERROR,
+                    BillingResponseCode.OK,
+                    BillingResponseCode.OK,
+                ),
+            ),
+        )
+        gateway.purchases = listOf(pendingPurchase(TOKEN_ONE))
+        val adapter = GooglePlayPurchaseAdapter(
+            packageName = PACKAGE_NAME,
+            activityHandleProvider = { BillingActivityHandle(ActivityMarker) },
+            restoreReferenceResolver = resolver(),
+            gatewayFactory = { gateway },
+            foregroundQueryIntervalMillis = 5_000L,
+            clockMillis = { nowMillis },
+            launchDispatcher = Dispatchers.Unconfined,
+        )
+
+        assertIs<VitrinaKitAdapterPurchaseResult.Failure>(
+            adapter.recover(instruction = instruction(), resumeData = null),
+        )
+        assertIs<VitrinaKitAdapterPurchaseResult.Pending>(
+            adapter.recover(instruction = instruction(), resumeData = null),
+        )
+        assertEquals(null, adapter.recover(instruction = instruction(), resumeData = null))
+        assertEquals(2, gateway.purchaseQueryCount)
+
+        assertIs<VitrinaKitAdapterPurchaseResult.Pending>(
+            adapter.recover(
+                instruction = instruction(attemptReference = "new-pending-attempt"),
+                resumeData = null,
+            ),
+        )
+        assertEquals(3, gateway.purchaseQueryCount)
+
+        nowMillis += 5_000L
+        assertIs<VitrinaKitAdapterPurchaseResult.Pending>(
+            adapter.recover(instruction = instruction(), resumeData = null),
+        )
+        assertEquals(4, gateway.purchaseQueryCount)
     }
 
     @Test
@@ -288,7 +437,7 @@ class GooglePlayPurchaseAdapterTest {
     }
 
     @Test
-    fun acceptanceEvictsForegroundCachedRawPurchase() = runTest {
+    fun acceptanceSuppressesForegroundRecoveryWithoutCachingRawPurchase() = runTest {
         val gateway = FakeBillingGateway(products = listOf(baseProduct()))
         val adapter = adapter(gateway)
         val purchase = async { adapter.present(instruction()) }
@@ -297,12 +446,11 @@ class GooglePlayPurchaseAdapterTest {
         val proof = assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(purchase.await()).proof
 
         gateway.purchases = listOf(purchasedPurchase(TOKEN_ONE))
-        adapter.onForeground()
-        assertEquals(1, recoveredPurchaseCount(adapter))
-
+        assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(
+            adapter.recover(instruction = instruction(), resumeData = null),
+        )
         adapter.onProofAccepted(proof)
 
-        assertEquals(0, recoveredPurchaseCount(adapter))
         assertTrue(adapter.queryRestorablePurchases().isEmpty())
     }
 
@@ -415,6 +563,7 @@ class GooglePlayPurchaseAdapterTest {
             activityHandleProvider = { BillingActivityHandle(ActivityMarker) },
             restoreReferenceResolver = resolver(),
             gatewayFactory = { gateways.removeFirst() },
+            launchDispatcher = Dispatchers.Unconfined,
         )
 
         adapter.close()
@@ -454,6 +603,7 @@ class GooglePlayPurchaseAdapterTest {
             restoreReferenceResolver = resolver(),
             gatewayFactory = { gateway },
             emptyCallbackTimeoutMillis = 50L,
+            launchDispatcher = Dispatchers.Unconfined,
         )
 
     private fun resolver(): GooglePlayRestoreReferenceResolver =
@@ -471,8 +621,9 @@ class GooglePlayPurchaseAdapterTest {
     private fun instruction(
         productId: String = PRODUCT_ID,
         packageName: String = PACKAGE_NAME,
+        attemptReference: String = ATTEMPT_REFERENCE,
     ): VitrinaKitPurchaseInstruction = VitrinaKitPurchaseInstruction(
-        attemptReference = ATTEMPT_REFERENCE,
+        attemptReference = attemptReference,
         productId = productId,
         priceId = BASE_PLAN_ID,
         packageName = packageName,
@@ -519,10 +670,13 @@ class GooglePlayPurchaseAdapterTest {
         return field.get(proof) as String
     }
 
-    private fun recoveredPurchaseCount(adapter: GooglePlayPurchaseAdapter): Int {
-        val field = adapter.javaClass.getDeclaredField("recoveredByFingerprint")
-        field.isAccessible = true
-        return (field.get(adapter) as Map<*, *>).size
+    private fun hasActiveWaiter(adapter: GooglePlayPurchaseAdapter): Boolean {
+        val lockField = adapter.javaClass.getDeclaredField("recoveryStateLock")
+        lockField.isAccessible = true
+        val lock = lockField.get(adapter) ?: error("Recovery state lock is missing.")
+        val waiterField = adapter.javaClass.getDeclaredField("activeWaiter")
+        waiterField.isAccessible = true
+        return synchronized(lock) { waiterField.get(adapter) != null }
     }
 
     private companion object {
@@ -540,12 +694,34 @@ class GooglePlayPurchaseAdapterTest {
 
 private val ActivityMarker = Any()
 
+private class HoldingDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
+    private val tasks = ConcurrentLinkedQueue<Runnable>()
+    private val dispatches = Channel<Unit>(capacity = Channel.UNLIMITED)
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        tasks += block
+        dispatches.trySend(Unit)
+    }
+
+    suspend fun awaitDispatch() {
+        dispatches.receive()
+    }
+
+    fun runAll() {
+        while (true) {
+            val task = tasks.poll() ?: return
+            task.run()
+        }
+    }
+}
+
 private class FakeBillingGateway(
     private val products: List<BillingProduct>,
     private val launchCode: BillingResponseCode = BillingResponseCode.OK,
     private val connectCodes: ArrayDeque<BillingResponseCode> = ArrayDeque(listOf(BillingResponseCode.OK)),
     private val purchaseQueryCodes: ArrayDeque<BillingResponseCode> =
         ArrayDeque(listOf(BillingResponseCode.OK)),
+    private val afterLaunch: () -> Unit = {},
 ) : GooglePlayBillingGateway {
     var purchases: List<BillingPurchase> = emptyList()
     val productQueries = mutableListOf<String>()
@@ -553,6 +729,7 @@ private class FakeBillingGateway(
     var connectCount = 0
     var purchaseQueryCount = 0
     var closeCount = 0
+    val launchThreads = Channel<String>(capacity = Channel.UNLIMITED)
     private var listener: ((BillingPurchaseUpdate) -> Unit)? = null
 
     override fun setPurchaseUpdateListener(listener: ((BillingPurchaseUpdate) -> Unit)?) {
@@ -581,7 +758,9 @@ private class FakeBillingGateway(
 
     override fun launch(activity: BillingActivityHandle, request: BillingFlowRequest): BillingResponseCode {
         assertEquals(ActivityMarker, activity.value)
+        launchThreads.trySend(Thread.currentThread().name)
         launches += request
+        afterLaunch()
         return launchCode
     }
 

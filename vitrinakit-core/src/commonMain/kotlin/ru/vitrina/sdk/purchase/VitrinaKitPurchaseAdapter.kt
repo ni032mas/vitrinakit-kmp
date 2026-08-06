@@ -36,6 +36,21 @@ interface VitrinaKitPurchaseAdapter {
     ): VitrinaKitAdapterPurchaseResult
 
     /**
+     * Queries provider state for one core-tracked attempt without presenting provider UI.
+     *
+     * This may run concurrently with [present]. If both observe the same terminal provider state,
+     * the adapter must hand it to exactly one caller and return `null` from the other. Returning
+     * `null` otherwise means no new provider state is available. The default is a safe no-op;
+     * query-capable provider adapters must override this explicitly. [resumeData] is supplied only
+     * as opaque context and must never cause this method to present provider UI.
+     */
+    @VitrinaKitPurchaseAdapterApi
+    suspend fun recover(
+        instruction: VitrinaKitPurchaseInstruction,
+        resumeData: VitrinaKitPurchaseResumeData?,
+    ): VitrinaKitAdapterPurchaseResult? = null
+
+    /**
      * Marks [proof] as accepted by the server so provider-local recovery can suppress duplicates.
      *
      * Core invokes this only after a successful confirmation or restore response. The default is a

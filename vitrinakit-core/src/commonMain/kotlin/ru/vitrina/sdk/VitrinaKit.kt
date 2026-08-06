@@ -304,6 +304,26 @@ object VitrinaKit {
     }
 
     /**
+     * Reconciles one identity-bound pending native purchase when the app returns to foreground.
+     *
+     * Returns `null` without querying a provider when no trusted subscriber has a pending attempt.
+     * A non-null result has the same server-authoritative semantics as [purchase]; provider state
+     * alone never grants access.
+     */
+    suspend fun onForeground(): VitrinaKitPurchaseResult? {
+        val current = lifecycleState.value
+        val active = current.runtime ?: return null
+        val trusted = current.identity as? BoundIdentity.Trusted ?: return null
+        val coordinator = active.coordinator ?: return null
+        val cacheGeneration = active.cache.generation
+        return coordinator.onForeground(
+            scope = trusted.scope,
+            expectedCacheGeneration = cacheGeneration,
+            identityLease = identityOperationLease(expected = current, bound = trusted),
+        )
+    }
+
+    /**
      * Returns the identified subscriber profile, refreshing it from the server when requested.
      *
      * @param forceRefresh Whether to bypass the subscriber-scoped in-memory cache.
@@ -917,6 +937,18 @@ object VitrinaKit {
             }
             sideEffect()
         }
+
+        override suspend fun <T> runConcurrent(sideEffect: suspend () -> T): T =
+            lifecycleLease.runConcurrentSideEffect {
+                val current = lifecycleState.value
+                if (current.revision != expected.revision ||
+                    current.runtime !== expected.runtime ||
+                    current.identity !== bound
+                ) {
+                    throw IdentityLifecycleInvalidatedException()
+                }
+                sideEffect()
+            }
     }
 
     private fun isSameIdentityLifecycle(expected: VitrinaKitLifecycleState): Boolean {
@@ -959,13 +991,15 @@ private data class VitrinaKitLifecycleState(
  *
  * Reentrancy requires admission from an active lexical ownership token so a hosted adapter and its
  * structured children may call the core-owned checkout callback without taking the lease twice.
- * Closing the token rejects new borrowers and drains admitted children before unlocking; escaped
- * child contexts must therefore reacquire the mutex and revalidate lifecycle state.
+ * Identity-validated foreground recovery may also borrow an active side-effect token so it can
+ * resolve a provider waiter; transition tokens are never externally borrowable. Closing a token
+ * rejects new borrowers and drains admitted work before unlocking.
  * Synchronous transitions use [Mutex.tryLock] and fail without state changes while a side effect is
  * suspended; callers can retry instead of blocking a Main/single-thread dispatcher.
  */
 private class ReentrantLifecycleLease {
     private val mutex = Mutex()
+    private val activeSideEffectLease = MutableStateFlow<HeldLifecycleLease?>(null)
 
     suspend fun <T> runSideEffect(block: suspend () -> T): T {
         val held = currentCoroutineContext()[HeldLifecycleLease]
@@ -978,10 +1012,30 @@ private class ReentrantLifecycleLease {
         }
         mutex.lock()
         return try {
-            runLocked(block = block)
+            runLocked(block = block, externallyBorrowable = true)
         } finally {
             mutex.unlock()
         }
+    }
+
+    suspend fun <T> runConcurrentSideEffect(block: suspend () -> T): T {
+        val contextual = currentCoroutineContext()[HeldLifecycleLease]
+        if (contextual?.owner === this && contextual.tryBorrow()) {
+            return try {
+                block()
+            } finally {
+                contextual.releaseBorrower()
+            }
+        }
+        val active = activeSideEffectLease.value
+        if (active?.tryBorrow() == true) {
+            return try {
+                block()
+            } finally {
+                active.releaseBorrower()
+            }
+        }
+        return runSideEffect(block = block)
     }
 
     suspend fun <T> runTransitionExclusive(
@@ -994,7 +1048,7 @@ private class ReentrantLifecycleLease {
         }
         mutex.lock()
         return try {
-            runLocked(block = block)
+            runLocked(block = block, externallyBorrowable = false)
         } finally {
             mutex.unlock()
         }
@@ -1005,22 +1059,32 @@ private class ReentrantLifecycleLease {
             return null
         }
         return try {
-            runBlocking { runLocked(block = block) }
+            runBlocking { runLocked(block = block, externallyBorrowable = false) }
         } finally {
             mutex.unlock()
         }
     }
 
-    private suspend fun <T> runLocked(block: suspend () -> T): T {
+    private suspend fun <T> runLocked(
+        block: suspend () -> T,
+        externallyBorrowable: Boolean,
+    ): T {
         val held = HeldLifecycleLease(owner = this)
-        return withContext(held) {
-            try {
-                block()
-            } finally {
-                withContext(NonCancellable) {
-                    held.closeAndDrain()
+        if (externallyBorrowable) {
+            activeSideEffectLease.value = held
+        }
+        return try {
+            withContext(held) {
+                try {
+                    block()
+                } finally {
+                    withContext(NonCancellable) {
+                        held.closeAndDrain()
+                    }
                 }
             }
+        } finally {
+            activeSideEffectLease.compareAndSet(expect = held, update = null)
         }
     }
 }

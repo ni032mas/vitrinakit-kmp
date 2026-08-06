@@ -6,7 +6,10 @@ import android.content.Context
 import java.security.MessageDigest
 import java.util.WeakHashMap
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,6 +36,9 @@ class GooglePlayPurchaseAdapter internal constructor(
     private val restoreReferenceResolver: GooglePlayRestoreReferenceResolver,
     private val gatewayFactory: () -> GooglePlayBillingGateway,
     private val emptyCallbackTimeoutMillis: Long = DefaultEmptyCallbackTimeoutMillis,
+    private val launchDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val foregroundQueryIntervalMillis: Long = DefaultForegroundQueryIntervalMillis,
+    private val clockMillis: () -> Long = { System.nanoTime() / NanosPerMillisecond },
 ) : VitrinaKitPurchaseAdapter {
     /**
      * Creates a Google Play adapter backed by BillingClient 9.1.0.
@@ -59,9 +65,9 @@ class GooglePlayPurchaseAdapter internal constructor(
 
     private val presentationMutex = Mutex()
     private val recoveryStateLock = Any()
-    private val recoveredByFingerprint = linkedMapOf<String, BillingPurchase>()
     private val proofFingerprints = WeakHashMap<ru.vitrina.sdk.purchase.VitrinaKitProviderProof, String>()
     private val acceptedProofFingerprints = mutableSetOf<String>()
+    private var lastForegroundQuery: ForegroundQuery? = null
     private var activeWaiter: ActivePurchaseWaiter? = null
     private var billingResources: BillingResources? = createResources()
 
@@ -104,44 +110,40 @@ class GooglePlayPurchaseAdapter internal constructor(
         synchronized(recoveryStateLock) {
             activeWaiter = waiter
         }
-        val launchCode = launchBillingFlow(
-            request = BillingFlowRequest(
-                productId = instruction.productId,
-                offerToken = offer.offerToken,
-                obfuscatedAccountId = instruction.accountBinding,
-                obfuscatedProfileId = instruction.accountBinding,
-            ),
-        ) ?: run {
-            clearWaiter(waiter)
-            return@withLock failure(
+        try {
+            val launchCode = launchBillingFlow(
+                request = BillingFlowRequest(
+                    productId = instruction.productId,
+                    offerToken = offer.offerToken,
+                    obfuscatedAccountId = instruction.accountBinding,
+                    obfuscatedProfileId = instruction.accountBinding,
+                ),
+            ) ?: return@withLock failure(
                 responseCode = BillingResponseCode.SERVICE_UNAVAILABLE,
                 message = "No foreground activity is available for Google Play Billing.",
             )
-        }
 
-        if (launchCode != BillingResponseCode.OK) {
-            clearWaiter(waiter)
-            if (launchCode == BillingResponseCode.ITEM_ALREADY_OWNED) {
-                recoverForInstruction(instruction)?.let { recovered -> return@withLock recovered }
+            if (launchCode != BillingResponseCode.OK) {
+                if (launchCode == BillingResponseCode.ITEM_ALREADY_OWNED) {
+                    recoverForInstruction(instruction)?.let { recovered -> return@withLock recovered }
+                }
+                return@withLock mapResponse(
+                    responseCode = launchCode,
+                    instruction = instruction,
+                )
             }
-            return@withLock mapResponse(
-                responseCode = launchCode,
-                instruction = instruction,
-            )
-        }
 
-        val update = try {
-            awaitPurchaseUpdate(waiter)
+            val update = awaitPurchaseUpdate(waiter)
+            if (update == null) {
+                return@withLock failure(
+                    responseCode = BillingResponseCode.ERROR,
+                    message = "Google Play did not return a matching purchase in time.",
+                )
+            }
+            mapUpdate(update = update, instruction = instruction)
         } finally {
             clearWaiter(waiter)
         }
-        if (update == null) {
-            return@withLock failure(
-                responseCode = BillingResponseCode.ERROR,
-                message = "Google Play did not return a matching purchase in time.",
-            )
-        }
-        mapUpdate(update = update, instruction = instruction)
     }
 
     /** Queries purchased subscriptions and applies the explicit restore reference resolver. */
@@ -155,7 +157,7 @@ class GooglePlayPurchaseAdapter internal constructor(
                 ),
             )
         }
-        val purchases = consumeRecoveredAnd(
+        val purchases = deduplicateQueried(
             queried = query.values,
             includeStates = setOf(BillingPurchaseState.PURCHASED),
         )
@@ -189,36 +191,58 @@ class GooglePlayPurchaseAdapter internal constructor(
         )
     }
 
+    /** Queries Play for one core-tracked attempt without launching billing UI. */
+    override suspend fun recover(
+        instruction: VitrinaKitPurchaseInstruction,
+        resumeData: VitrinaKitPurchaseResumeData?,
+    ): VitrinaKitAdapterPurchaseResult? {
+        validateInstruction(instruction)?.let { failure -> return failure }
+        if (resumeData != null && resumeData.value != instruction.attemptReference) {
+            return failure(
+                responseCode = BillingResponseCode.DEVELOPER_ERROR,
+                message = "The Google Play resume state does not match the purchase attempt.",
+            )
+        }
+        val now = clockMillis()
+        val throttled = synchronized(recoveryStateLock) {
+            lastForegroundQuery?.let { query ->
+                query.attemptReference == instruction.attemptReference &&
+                    now - query.timestampMillis < foregroundQueryIntervalMillis
+            } ?: false
+        }
+        if (throttled) {
+            return null
+        }
+        val recovered = recoverForInstruction(
+            instruction = instruction,
+            completeActiveWaiter = true,
+        )
+        if (recovered !is VitrinaKitAdapterPurchaseResult.Failure) {
+            synchronized(recoveryStateLock) {
+                lastForegroundQuery = ForegroundQuery(
+                    attemptReference = instruction.attemptReference,
+                    timestampMillis = now,
+                )
+            }
+        }
+        return recovered
+    }
+
     /** Suppresses a token fingerprint after core reports server acceptance of its proof. */
     override fun onProofAccepted(proof: ru.vitrina.sdk.purchase.VitrinaKitProviderProof) {
         synchronized(recoveryStateLock) {
             val fingerprint = proofFingerprints.remove(proof) ?: return
             acceptedProofFingerprints += fingerprint
-            recoveredByFingerprint.remove(fingerprint)
             proofFingerprints.entries.removeAll { entry -> entry.value == fingerprint }
-        }
-    }
-
-    /**
-     * Queries Play when the application returns to foreground.
-     *
-     * If presentation is waiting, a matching queried purchase completes that waiter. Other results
-     * are cached in memory only until the next present, resume, or restore query consumes them.
-     * Server submission remains owned by the provider-neutral core call that consumes the result.
-     */
-    suspend fun onForeground() {
-        val query = resources().connection.queryPurchases()
-        if (query.responseCode == BillingResponseCode.OK) {
-            handleRecoveredPurchases(query.values)
         }
     }
 
     /** Disconnects current BillingClient resources; the next operation initializes a fresh client. */
     override fun close() {
         val (waiter, resources) = synchronized(recoveryStateLock) {
-            recoveredByFingerprint.clear()
             proofFingerprints.clear()
             acceptedProofFingerprints.clear()
+            lastForegroundQuery = null
             val waiter = activeWaiter.also { activeWaiter = null }
             val resources = billingResources.also { billingResources = null }
             waiter to resources
@@ -235,6 +259,7 @@ class GooglePlayPurchaseAdapter internal constructor(
 
     private suspend fun recoverForInstruction(
         instruction: VitrinaKitPurchaseInstruction,
+        completeActiveWaiter: Boolean = false,
     ): VitrinaKitAdapterPurchaseResult? {
         val query = resources().connection.queryPurchases()
         if (query.responseCode != BillingResponseCode.OK) {
@@ -243,7 +268,26 @@ class GooglePlayPurchaseAdapter internal constructor(
                 message = "Google Play purchase recovery is unavailable.",
             )
         }
-        val matching = consumeRecoveredAnd(
+        val waiter = if (completeActiveWaiter) {
+            synchronized(recoveryStateLock) { activeWaiter }
+        } else {
+            null
+        }
+        val waiterMatches = waiter?.let { current ->
+            query.values
+                .filter { purchase -> current.productId in purchase.productIds && !isAccepted(purchase) }
+                .distinctBy { purchase -> purchase.purchaseToken }
+        }.orEmpty()
+        if (waiter != null && waiterMatches.isNotEmpty()) {
+            waiter.result.complete(
+                BillingPurchaseUpdate(
+                    responseCode = BillingResponseCode.OK,
+                    purchases = waiterMatches,
+                ),
+            )
+            return null
+        }
+        val matching = deduplicateQueried(
             queried = query.values,
             includeStates = setOf(BillingPurchaseState.PURCHASED, BillingPurchaseState.PENDING),
         ).filter { purchase -> instruction.productId in purchase.productIds }
@@ -259,16 +303,14 @@ class GooglePlayPurchaseAdapter internal constructor(
         return null
     }
 
-    private fun consumeRecoveredAnd(
+    private fun deduplicateQueried(
         queried: List<BillingPurchase>,
         includeStates: Set<BillingPurchaseState>,
     ): List<BillingPurchase> = synchronized(recoveryStateLock) {
-        val combined = (recoveredByFingerprint.values + queried)
+        queried
             .filter { purchase -> purchase.state in includeStates }
             .filterNot(::isAccepted)
             .distinctBy { purchase -> purchase.purchaseToken }
-        combined.forEach { purchase -> recoveredByFingerprint.remove(tokenFingerprint(purchase.purchaseToken)) }
-        combined
     }
 
     private fun handlePurchaseUpdate(update: BillingPurchaseUpdate) {
@@ -294,31 +336,6 @@ class GooglePlayPurchaseAdapter internal constructor(
                     purchases = matching,
                 ),
             )
-        }
-    }
-
-    private fun handleRecoveredPurchases(purchases: List<BillingPurchase>) {
-        val waiter = synchronized(recoveryStateLock) { activeWaiter }
-        val matching = waiter?.let { current ->
-            purchases
-                .filter { purchase -> current.productId in purchase.productIds && !isAccepted(purchase) }
-                .distinctBy { purchase -> purchase.purchaseToken }
-        }.orEmpty()
-        if (waiter != null && matching.isNotEmpty() && !waiter.result.isCompleted) {
-            waiter.result.complete(
-                BillingPurchaseUpdate(
-                    responseCode = BillingResponseCode.OK,
-                    purchases = matching,
-                ),
-            )
-        }
-        synchronized(recoveryStateLock) {
-            purchases
-                .filterNot(::isAccepted)
-                .filterNot { purchase -> matching.any { it.purchaseToken == purchase.purchaseToken } }
-                .forEach { purchase ->
-                    recoveredByFingerprint[tokenFingerprint(purchase.purchaseToken)] = purchase
-                }
         }
     }
 
@@ -442,10 +459,11 @@ class GooglePlayPurchaseAdapter internal constructor(
         tokenFingerprint(purchase.purchaseToken) in acceptedProofFingerprints
     }
 
-    private fun launchBillingFlow(request: BillingFlowRequest): BillingResponseCode? {
-        val activity = activityHandleProvider() ?: return null
-        return resources().connection.launch(activity = activity, request = request)
-    }
+    private suspend fun launchBillingFlow(request: BillingFlowRequest): BillingResponseCode? =
+        withContext(launchDispatcher) {
+            val activity = activityHandleProvider() ?: return@withContext null
+            resources().connection.launch(activity = activity, request = request)
+        }
 
     private fun resources(): BillingResources = synchronized(recoveryStateLock) {
         billingResources ?: createResources().also { created -> billingResources = created }
@@ -462,6 +480,7 @@ class GooglePlayPurchaseAdapter internal constructor(
 
     private companion object {
         const val DefaultEmptyCallbackTimeoutMillis = 30_000L
+        const val DefaultForegroundQueryIntervalMillis = 30_000L
     }
 }
 
@@ -480,6 +499,11 @@ private sealed interface PurchaseWaitSignal {
 private data class BillingResources(
     val gateway: GooglePlayBillingGateway,
     val connection: BillingClientConnection,
+)
+
+private data class ForegroundQuery(
+    val attemptReference: String,
+    val timestampMillis: Long,
 )
 
 private fun BillingResponseCode.isRetryable(): Boolean = when (this) {
@@ -502,3 +526,4 @@ private fun tokenFingerprint(token: String): String = MessageDigest.getInstance(
 
 private const val UnsignedByteMask = 0xff
 private const val HexRadix = 16
+private const val NanosPerMillisecond = 1_000_000L

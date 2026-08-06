@@ -21,6 +21,8 @@ group = "ru.vitrina"
 version = "0.1.0-rc.6"
 extra["googlePlayBillingVersion"] = "9.1.0"
 extra["kotlinxCoroutinesVersion"] = "1.10.2"
+extra["ruStoreBomVersion"] = "2026.07.01"
+extra["ruStorePayVersion"] = "11.0.0"
 
 subprojects {
     group = rootProject.group
@@ -97,6 +99,18 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
     @get:Input
     abstract val kotlinxCoroutinesVersion: Property<String>
 
+    @get:Input
+    abstract val ruStoreAndroidArtifactId: Property<String>
+
+    @get:Input
+    abstract val ruStoreBomVersion: Property<String>
+
+    @get:Input
+    abstract val ruStorePayVersion: Property<String>
+
+    @get:Input
+    abstract val ruStoreResolvedPayVersion: Property<String>
+
     @TaskAction
     fun verify() {
         val repository = repositoryDirectory.get().asFile
@@ -130,6 +144,11 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
                             "Core artifact POM must not depend on Google Play Billing: $pomFile",
                         )
                     }
+                    if (pom.contains("<groupId>ru.rustore.sdk</groupId>")) {
+                        throw GradleException(
+                            "Core artifact POM must not depend on RuStore Pay: $pomFile",
+                        )
+                    }
                 }
         }
 
@@ -147,8 +166,12 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
         }
         val googlePlayPom = googlePlayPoms.single().readText()
         val coroutinesAndroidArtifact = "<artifactId>kotlinx-coroutines-android</artifactId>"
+        val androidProviderArtifactIds = setOf(
+            googlePlayAndroidArtifactId.get(),
+            ruStoreAndroidArtifactId.get(),
+        )
         expectedArtifactIds.get()
-            .filterNot { artifactId -> artifactId == googlePlayAndroidArtifactId.get() }
+            .filterNot { artifactId -> artifactId in androidProviderArtifactIds }
             .forEach { artifactId ->
                 val artifactDirectory = repository.resolve("ru/vitrina/$artifactId")
                 artifactDirectory.walkTopDown()
@@ -210,9 +233,119 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
         if (billingGroupIndex != googlePlayPom.lastIndexOf(billingGroup)) {
             throw GradleException(
                 "Google Play Android POM must contain exactly one Billing dependency: " +
-                    googlePlayPoms.single(),
+                googlePlayPoms.single(),
             )
         }
+
+        val ruStorePomDirectory = repository.resolve(
+            "ru/vitrina/${ruStoreAndroidArtifactId.get()}",
+        )
+        val ruStorePoms = ruStorePomDirectory.walkTopDown()
+            .filter { file -> file.extension == "pom" }
+            .toList()
+        if (ruStorePoms.size != 1) {
+            throw GradleException(
+                "Expected one RuStore Android POM, found ${ruStorePoms.size}: $ruStorePomDirectory",
+            )
+        }
+        val ruStorePom = ruStorePoms.single().readText()
+        val bomArtifact = "<artifactId>bom</artifactId>"
+        val bomIndex = ruStorePom.indexOf(bomArtifact)
+        val bomBlockStart = ruStorePom.lastIndexOf("<dependency>", bomIndex)
+        val bomBlockEnd = ruStorePom.indexOf("</dependency>", bomIndex)
+        val bomDependency = if (bomBlockStart >= 0 && bomBlockEnd >= 0) {
+            ruStorePom.substring(bomBlockStart, bomBlockEnd)
+        } else {
+            ""
+        }
+        val hasExactBomImport = bomDependency.contains("<groupId>ru.rustore.sdk</groupId>") &&
+            bomDependency.contains(bomArtifact) &&
+            bomDependency.contains("<version>${ruStoreBomVersion.get()}</version>") &&
+            bomDependency.contains("<type>pom</type>") &&
+            bomDependency.contains("<scope>import</scope>")
+        if (!hasExactBomImport || bomIndex != ruStorePom.lastIndexOf(bomArtifact)) {
+            throw GradleException(
+                "RuStore Android POM must import BOM ${ruStoreBomVersion.get()}: ${ruStorePoms.single()}",
+            )
+        }
+        val payArtifact = "<artifactId>pay</artifactId>"
+        val payIndex = ruStorePom.indexOf(payArtifact)
+        val payBlockStart = ruStorePom.lastIndexOf("<dependency>", payIndex)
+        val payBlockEnd = ruStorePom.indexOf("</dependency>", payIndex)
+        val payDependency = if (payBlockStart >= 0 && payBlockEnd >= 0) {
+            ruStorePom.substring(payBlockStart, payBlockEnd)
+        } else {
+            ""
+        }
+        val hasRuntimePay = payDependency.contains("<groupId>ru.rustore.sdk</groupId>") &&
+            payDependency.contains(payArtifact) &&
+            payDependency.contains("<scope>runtime</scope>") &&
+            !payDependency.contains("<scope>compile</scope>")
+        if (!hasRuntimePay || payIndex != ruStorePom.lastIndexOf(payArtifact)) {
+            throw GradleException(
+                "RuStore Android POM must contain exactly one runtime Pay dependency: " +
+                    ruStorePoms.single(),
+            )
+        }
+        val ruStoreModules = ruStorePomDirectory.walkTopDown()
+            .filter { file -> file.extension == "module" }
+            .toList()
+        if (ruStoreModules.size != 1) {
+            throw GradleException(
+                "Expected one RuStore Android Gradle module, found ${ruStoreModules.size}: " +
+                    ruStorePomDirectory,
+            )
+        }
+        val ruStoreModule = ruStoreModules.single().readText()
+        val apiVariantName = "\"name\": \"androidApiElements-published\""
+        val runtimeVariantName = "\"name\": \"androidRuntimeElements-published\""
+        val sourcesVariantName = "\"name\": \"androidSourcesElements-published\""
+        val apiVariantStart = ruStoreModule.indexOf(apiVariantName)
+        val runtimeVariantStart = ruStoreModule.indexOf(runtimeVariantName)
+        val sourcesVariantStart = ruStoreModule.indexOf(sourcesVariantName)
+        if (apiVariantStart < 0 || runtimeVariantStart <= apiVariantStart ||
+            sourcesVariantStart <= runtimeVariantStart
+        ) {
+            throw GradleException(
+                "RuStore Android metadata must contain ordered API, runtime, and sources variants: " +
+                    ruStoreModules.single(),
+            )
+        }
+        val apiVariant = ruStoreModule.substring(apiVariantStart, runtimeVariantStart)
+        val runtimeVariant = ruStoreModule.substring(runtimeVariantStart, sourcesVariantStart)
+        if (apiVariant.contains("\"group\": \"ru.rustore.sdk\"")) {
+            throw GradleException(
+                "RuStore Pay must be absent from the Android API variant: ${ruStoreModules.single()}",
+            )
+        }
+        val hasRuntimeModuleBom = runtimeVariant.contains("\"group\": \"ru.rustore.sdk\"") &&
+            runtimeVariant.contains("\"module\": \"bom\"")
+        val hasRuntimeModulePay = runtimeVariant.contains("\"group\": \"ru.rustore.sdk\"") &&
+            runtimeVariant.contains("\"module\": \"pay\"")
+        if (!hasRuntimeModuleBom || !hasRuntimeModulePay ||
+            ruStoreResolvedPayVersion.get() != ruStorePayVersion.get()
+        ) {
+            throw GradleException(
+                "RuStore Android runtime metadata must import the BOM and resolve Pay " +
+                    "${ruStorePayVersion.get()}, found " +
+                    "${ruStoreResolvedPayVersion.get()}: ${ruStoreModules.single()}",
+            )
+        }
+        expectedArtifactIds.get()
+            .filterNot { artifactId -> artifactId == ruStoreAndroidArtifactId.get() }
+            .forEach { artifactId ->
+                val artifactDirectory = repository.resolve("ru/vitrina/$artifactId")
+                artifactDirectory.walkTopDown()
+                    .filter { file -> file.extension == "pom" || file.extension == "module" }
+                    .forEach { metadataFile ->
+                        if (metadataFile.readText().contains("ru.rustore.sdk")) {
+                            throw GradleException(
+                                "Only the RuStore Android artifact may depend on RuStore Pay: " +
+                                    metadataFile,
+                            )
+                        }
+                    }
+            }
     }
 }
 
@@ -295,6 +428,23 @@ tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
     googlePlayAndroidArtifactId.set("vitrinakit-googleplay-android$vitrinaKitPublicationSuffix")
     googlePlayBillingVersion.set(rootProject.extra["googlePlayBillingVersion"] as String)
     kotlinxCoroutinesVersion.set(rootProject.extra["kotlinxCoroutinesVersion"] as String)
+    ruStoreAndroidArtifactId.set("vitrinakit-rustore-android$vitrinaKitPublicationSuffix")
+    ruStoreBomVersion.set(rootProject.extra["ruStoreBomVersion"] as String)
+    ruStorePayVersion.set(rootProject.extra["ruStorePayVersion"] as String)
+    ruStoreResolvedPayVersion.set(
+        providers.provider {
+            project(":vitrinakit-rustore")
+                .configurations
+                .getByName("androidRuntimeClasspath")
+                .resolvedConfiguration
+                .resolvedArtifacts
+                .single { artifact ->
+                    artifact.moduleVersion.id.group == "ru.rustore.sdk" &&
+                        artifact.name == "pay"
+                }
+                .moduleVersion.id.version
+        },
+    )
     dependsOn(
         "verifySdk",
         prepareReleaseArtifactRepository,

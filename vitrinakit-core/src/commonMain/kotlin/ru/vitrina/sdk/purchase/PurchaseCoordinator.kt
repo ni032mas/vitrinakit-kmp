@@ -39,6 +39,22 @@ internal interface PurchaseApi {
     suspend fun refreshProfile(scope: SubscriberScope): PurchaseApiResult<VitrinaKitProfile>
 }
 
+/**
+ * Serializes one identity-bound external side effect with SDK lifecycle transitions.
+ *
+ * The coordinator intentionally leases each API/provider call separately so a purchase does not
+ * monopolize the lifecycle while it performs local orchestration between side effects.
+ */
+internal interface IdentityOperationLease {
+    suspend fun <T> run(sideEffect: suspend () -> T): T
+}
+
+internal object UnleasedIdentityOperation : IdentityOperationLease {
+    override suspend fun <T> run(sideEffect: suspend () -> T): T = sideEffect()
+}
+
+internal class IdentityLifecycleInvalidatedException : Exception()
+
 internal data class PendingPurchase(
     val attemptReference: String,
     val placementId: String,
@@ -69,6 +85,7 @@ internal class PurchaseCoordinator(
         placementId: String,
         product: PaywallProduct,
         expectedCacheGeneration: Long,
+        identityLease: IdentityOperationLease = UnleasedIdentityOperation,
     ): VitrinaKitPurchaseResult {
         if (!purchaseGuard.tryLock()) {
             return failure(
@@ -86,6 +103,7 @@ internal class PurchaseCoordinator(
                     placementId = placementId,
                     product = product,
                     cacheGeneration = expectedCacheGeneration,
+                    identityLease = identityLease,
                 )
             }
                 .fold(
@@ -93,6 +111,9 @@ internal class PurchaseCoordinator(
                     onFailure = { throwable ->
                         if (throwable is CancellationException) {
                             throw throwable
+                        }
+                        if (throwable is IdentityLifecycleInvalidatedException) {
+                            return@fold invalidatedIdentityFailure()
                         }
                         failure(
                             code = VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE,
@@ -108,6 +129,7 @@ internal class PurchaseCoordinator(
     suspend fun restore(
         scope: SubscriberScope,
         expectedCacheGeneration: Long,
+        identityLease: IdentityOperationLease = UnleasedIdentityOperation,
     ): VitrinaKitRestoreResult {
         if (!purchaseGuard.tryLock()) {
             return VitrinaKitRestoreResult.Failure(
@@ -122,13 +144,20 @@ internal class PurchaseCoordinator(
                 return invalidatedIdentityRestoreFailure()
             }
             return runCatching {
-                restoreGuarded(scope = scope, cacheGeneration = expectedCacheGeneration)
+                restoreGuarded(
+                    scope = scope,
+                    cacheGeneration = expectedCacheGeneration,
+                    identityLease = identityLease,
+                )
             }
                 .fold(
                     onSuccess = { result -> result },
                     onFailure = { throwable ->
                         if (throwable is CancellationException) {
                             throw throwable
+                        }
+                        if (throwable is IdentityLifecycleInvalidatedException) {
+                            return@fold invalidatedIdentityRestoreFailure()
                         }
                         VitrinaKitRestoreResult.Failure(
                             error = error(
@@ -158,6 +187,7 @@ internal class PurchaseCoordinator(
         placementId: String,
         product: PaywallProduct,
         cacheGeneration: Long,
+        identityLease: IdentityOperationLease,
     ): VitrinaKitPurchaseResult {
         if (placementId.isBlank()) {
             return failure(
@@ -191,15 +221,18 @@ internal class PurchaseCoordinator(
                 scope = scope,
                 pending = compatible,
                 cacheGeneration = cacheGeneration,
+                identityLease = identityLease,
             )
         }
-        val started = api.startPurchase(
-            scope = scope,
-            placementId = placementId,
-            productReference = product.productKey,
-            capability = adapter.capability,
-            idempotencyKey = startKey,
-        )
+        val started = identityLease.run {
+            api.startPurchase(
+                scope = scope,
+                placementId = placementId,
+                productReference = product.productKey,
+                capability = adapter.capability,
+                idempotencyKey = startKey,
+            )
+        }
         val attempt = when (started) {
             is PurchaseApiResult.Success -> started.value
             is PurchaseApiResult.Failure -> return VitrinaKitPurchaseResult.Failure(started.error)
@@ -235,9 +268,13 @@ internal class PurchaseCoordinator(
             resumeData != null &&
             compatible.attemptReference == attempt.reference
         ) {
-            adapter.resume(instruction = attempt.instruction, resumeData = resumeData)
+            identityLease.run {
+                adapter.resume(instruction = attempt.instruction, resumeData = resumeData)
+            }
         } else {
-            adapter.present(instruction = attempt.instruction)
+            identityLease.run {
+                adapter.present(instruction = attempt.instruction)
+            }
         }
         if (cache.generation != cacheGeneration) {
             return invalidatedIdentityFailure()
@@ -251,6 +288,7 @@ internal class PurchaseCoordinator(
             confirmationKey = confirmationKey,
             adapterResult = adapterResult,
             cacheGeneration = cacheGeneration,
+            identityLease = identityLease,
         )
     }
 
@@ -263,6 +301,7 @@ internal class PurchaseCoordinator(
         confirmationKey: String,
         adapterResult: VitrinaKitAdapterPurchaseResult,
         cacheGeneration: Long,
+        identityLease: IdentityOperationLease,
     ): VitrinaKitPurchaseResult = when (adapterResult) {
         is VitrinaKitAdapterPurchaseResult.ProofReady -> confirm(
             scope = scope,
@@ -273,6 +312,7 @@ internal class PurchaseCoordinator(
             confirmationKey = confirmationKey,
             proof = adapterResult.proof,
             cacheGeneration = cacheGeneration,
+            identityLease = identityLease,
         )
 
         is VitrinaKitAdapterPurchaseResult.Pending -> {
@@ -317,13 +357,16 @@ internal class PurchaseCoordinator(
         confirmationKey: String,
         proof: VitrinaKitProviderProof,
         cacheGeneration: Long,
+        identityLease: IdentityOperationLease,
     ): VitrinaKitPurchaseResult {
-        val confirmed = api.confirmPurchase(
-            scope = scope,
-            attemptReference = attempt.reference,
-            idempotencyKey = confirmationKey,
-            proof = proof,
-        )
+        val confirmed = identityLease.run {
+            api.confirmPurchase(
+                scope = scope,
+                attemptReference = attempt.reference,
+                idempotencyKey = confirmationKey,
+                proof = proof,
+            )
+        }
         if (cache.generation != cacheGeneration) {
             return invalidatedIdentityFailure()
         }
@@ -397,11 +440,14 @@ internal class PurchaseCoordinator(
         scope: SubscriberScope,
         pending: PendingPurchase,
         cacheGeneration: Long,
+        identityLease: IdentityOperationLease,
     ): VitrinaKitPurchaseResult {
-        val status = api.getPurchase(
-            scope = scope,
-            attemptReference = pending.attemptReference,
-        )
+        val status = identityLease.run {
+            api.getPurchase(
+                scope = scope,
+                attemptReference = pending.attemptReference,
+            )
+        }
         val attempt = when (status) {
             is PurchaseApiResult.Failure -> return VitrinaKitPurchaseResult.Failure(status.error)
             is PurchaseApiResult.Success -> status.value
@@ -416,6 +462,7 @@ internal class PurchaseCoordinator(
                 scope = scope,
                 attempt = attempt,
                 cacheGeneration = cacheGeneration,
+                identityLease = identityLease,
             )
 
             VitrinaKitPurchaseAttemptStatus.CANCELLED -> {
@@ -442,12 +489,14 @@ internal class PurchaseCoordinator(
                 pending = pending,
                 attempt = attempt,
                 cacheGeneration = cacheGeneration,
+                identityLease = identityLease,
             )
 
             VitrinaKitPurchaseAttemptStatus.CREATED -> recoverCreatedAttempt(
                 scope = scope,
                 pending = pending,
                 cacheGeneration = cacheGeneration,
+                identityLease = identityLease,
             )
 
             VitrinaKitPurchaseAttemptStatus.PROOF_RECEIVED,
@@ -464,14 +513,17 @@ internal class PurchaseCoordinator(
         scope: SubscriberScope,
         pending: PendingPurchase,
         cacheGeneration: Long,
+        identityLease: IdentityOperationLease,
     ): VitrinaKitPurchaseResult {
-        val restarted = api.startPurchase(
-            scope = scope,
-            placementId = pending.placementId,
-            productReference = pending.productReference,
-            capability = pending.capability,
-            idempotencyKey = pending.startIdempotencyKey,
-        )
+        val restarted = identityLease.run {
+            api.startPurchase(
+                scope = scope,
+                placementId = pending.placementId,
+                productReference = pending.productReference,
+                capability = pending.capability,
+                idempotencyKey = pending.startIdempotencyKey,
+            )
+        }
         val attempt = when (restarted) {
             is PurchaseApiResult.Failure -> return VitrinaKitPurchaseResult.Failure(restarted.error)
             is PurchaseApiResult.Success -> restarted.value
@@ -484,6 +536,7 @@ internal class PurchaseCoordinator(
             pending = pending,
             attempt = attempt,
             cacheGeneration = cacheGeneration,
+            identityLease = identityLease,
         )
     }
 
@@ -492,6 +545,7 @@ internal class PurchaseCoordinator(
         pending: PendingPurchase,
         attempt: PurchaseAttempt,
         cacheGeneration: Long,
+        identityLease: IdentityOperationLease,
     ): VitrinaKitPurchaseResult {
         if (attempt.capability != adapter.capability) {
             cache.clearResumeIfCurrent(key = scope.cacheKey, generation = cacheGeneration)
@@ -500,7 +554,9 @@ internal class PurchaseCoordinator(
                 message = "The build does not contain the required purchase adapter.",
             )
         }
-        val adapterResult = adapter.present(instruction = attempt.instruction)
+        val adapterResult = identityLease.run {
+            adapter.present(instruction = attempt.instruction)
+        }
         if (cache.generation != cacheGeneration) {
             return invalidatedIdentityFailure()
         }
@@ -513,6 +569,7 @@ internal class PurchaseCoordinator(
             confirmationKey = pending.confirmationIdempotencyKey,
             adapterResult = adapterResult,
             cacheGeneration = cacheGeneration,
+            identityLease = identityLease,
         )
     }
 
@@ -520,7 +577,10 @@ internal class PurchaseCoordinator(
         scope: SubscriberScope,
         attempt: PurchaseAttempt,
         cacheGeneration: Long,
-    ): VitrinaKitPurchaseResult = when (val profile = api.refreshProfile(scope = scope)) {
+        identityLease: IdentityOperationLease,
+    ): VitrinaKitPurchaseResult = when (
+        val profile = identityLease.run { api.refreshProfile(scope = scope) }
+    ) {
         is PurchaseApiResult.Failure -> VitrinaKitPurchaseResult.Failure(profile.error)
         is PurchaseApiResult.Success -> {
             if (cache.generation != cacheGeneration) {
@@ -542,16 +602,19 @@ internal class PurchaseCoordinator(
     private suspend fun restoreGuarded(
         scope: SubscriberScope,
         cacheGeneration: Long,
+        identityLease: IdentityOperationLease,
     ): VitrinaKitRestoreResult {
-        val purchases = adapter.queryRestorablePurchases()
+        val purchases = identityLease.run { adapter.queryRestorablePurchases() }
         if (cache.generation != cacheGeneration) {
             return invalidatedIdentityRestoreFailure()
         }
-        val restored = api.restorePurchases(
-            scope = scope,
-            purchases = purchases,
-            capability = adapter.capability,
-        )
+        val restored = identityLease.run {
+            api.restorePurchases(
+                scope = scope,
+                purchases = purchases,
+                capability = adapter.capability,
+            )
+        }
         return when (restored) {
             is PurchaseApiResult.Failure -> VitrinaKitRestoreResult.Failure(restored.error)
             is PurchaseApiResult.Success -> {

@@ -184,10 +184,17 @@ class VitrinaClient(
         message = "Use the identity-bound VitrinaKit facade and a configured hosted adapter.",
         replaceWith = ReplaceWith("VitrinaKit.purchase(product)"),
     )
-    suspend fun createCheckoutSession(request: CheckoutSessionRequest): VitrinaResult<CheckoutSession> = request(
+    suspend fun createCheckoutSession(request: CheckoutSessionRequest): VitrinaResult<CheckoutSession> =
+        createCheckoutSession(request = request, subscriberSession = null)
+
+    internal suspend fun createCheckoutSession(
+        request: CheckoutSessionRequest,
+        subscriberSession: String?,
+    ): VitrinaResult<CheckoutSession> = request(
         method = VitrinaHttpMethod.POST,
         path = "/api/v1/checkout/sessions",
         body = json.encodeToString(request),
+        additionalHeaders = subscriberSessionHeaders(sessionToken = subscriberSession),
         decode = { payload -> json.decodeFromString<CheckoutSession>(payload) },
         errorMapper = ::checkoutError,
     )

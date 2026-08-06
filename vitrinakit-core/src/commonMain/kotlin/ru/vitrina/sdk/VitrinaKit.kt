@@ -3,8 +3,15 @@
 package ru.vitrina.sdk
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import ru.vitrina.sdk.cache.SubscriberCache
 import ru.vitrina.sdk.cache.SubscriberCacheKey
 import ru.vitrina.sdk.http.KtorVitrinaHttpClient
@@ -18,6 +25,8 @@ import ru.vitrina.sdk.model.VitrinaKitPurchase
 import ru.vitrina.sdk.model.VitrinaKitResult
 import ru.vitrina.sdk.model.VitrinaResult
 import ru.vitrina.sdk.purchase.PurchaseCoordinator
+import ru.vitrina.sdk.purchase.IdentityLifecycleInvalidatedException
+import ru.vitrina.sdk.purchase.IdentityOperationLease
 import ru.vitrina.sdk.purchase.SubscriberScope
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapter
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapterApi
@@ -82,14 +91,15 @@ class VitrinaKitConfig private constructor(
 @OptIn(VitrinaKitPurchaseAdapterApi::class)
 object VitrinaKit {
     private val lifecycleState = MutableStateFlow(VitrinaKitLifecycleState())
+    private val lifecycleLease = ReentrantLifecycleLease()
 
     /** Activates the SDK with one public API key and exactly one purchase adapter. */
-    fun activate(config: VitrinaKitConfig): VitrinaKitResult<Unit> {
+    fun activate(config: VitrinaKitConfig): VitrinaKitResult<Unit> = lifecycleLease.tryBlocking {
         if (config.publicApiKey.isBlank()) {
-            return VitrinaKitResult.Failure(VitrinaKitError.Configuration("publicApiKey is required."))
+            return@tryBlocking VitrinaKitResult.Failure(VitrinaKitError.Configuration("publicApiKey is required."))
         }
         if (config.purchaseAdapters.size + config.hostedMigrationAdapters.size != RequiredPurchaseAdapterCount) {
-            return VitrinaKitResult.Failure(
+            return@tryBlocking VitrinaKitResult.Failure(
                 VitrinaKitError.Configuration("Exactly one purchase adapter is required."),
             )
         }
@@ -118,15 +128,21 @@ object VitrinaKit {
         )
         val previous = replaceRuntime(nextRuntime)
         previous.runtime?.closePurchaseResources()
-        return VitrinaKitResult.Success(Unit)
-    }
+        VitrinaKitResult.Success(Unit)
+    } ?: lifecycleBusy()
 
     /**
      * Replaces the current subscriber identity and returns its authoritative profile.
      *
      * Trusted tokens are exchanged for an opaque subscriber session and are never retained.
      */
-    suspend fun identify(identity: VitrinaKitIdentity): VitrinaKitResult<VitrinaKitProfile> {
+    suspend fun identify(identity: VitrinaKitIdentity): VitrinaKitResult<VitrinaKitProfile> =
+        lifecycleLease.runTransitionExclusive(
+            onNested = { lifecycleBusy() },
+            block = { identifyLeased(identity = identity) },
+        )
+
+    private suspend fun identifyLeased(identity: VitrinaKitIdentity): VitrinaKitResult<VitrinaKitProfile> {
         val transition = beginIdentityTransition() ?: return notActivated()
         val active = transition.state.runtime ?: return notActivated()
         if (transition.hadIdentity) {
@@ -153,13 +169,13 @@ object VitrinaKit {
     }
 
     /** Clears subscriber-scoped state and releases adapter resources. */
-    fun logout(): VitrinaKitResult<Unit> {
-        val previous = clearIdentity() ?: return notActivated()
-        val active = previous.runtime ?: return notActivated()
+    fun logout(): VitrinaKitResult<Unit> = lifecycleLease.tryBlocking {
+        val previous = clearIdentity() ?: return@tryBlocking notActivated()
+        val active = previous.runtime ?: return@tryBlocking notActivated()
         active.closePurchaseResources()
         active.cache.clearAll()
-        return VitrinaKitResult.Success(Unit)
-    }
+        VitrinaKitResult.Success(Unit)
+    } ?: lifecycleBusy()
 
     /** Fetches a paywall for the currently identified subscriber. */
     suspend fun getPaywall(placementId: String): VitrinaKitResult<VitrinaKitPaywall> {
@@ -167,11 +183,16 @@ object VitrinaKit {
         val active = current.runtime ?: return notActivated()
         val bound = current.identity ?: return identityRequired()
         val cacheGeneration = active.cache.generation
-        val result = active.client.fetchPaywall(
-            placementKey = placementId,
-            externalUserId = bound.externalUserId,
-            subscriberSession = bound.sessionToken,
-        ).toKitResult()
+        val result = lifecycleLease.runSideEffect {
+            if (!isSameIdentityLifecycle(current)) {
+                return@runSideEffect null
+            }
+            active.client.fetchPaywall(
+                placementKey = placementId,
+                externalUserId = bound.externalUserId,
+                subscriberSession = bound.sessionToken,
+            ).toKitResult()
+        } ?: return staleIdentityTransition()
         if (result is VitrinaKitResult.Success) {
             if (!isSameIdentityLifecycle(current) || active.cache.generation != cacheGeneration) {
                 return staleIdentityTransition()
@@ -206,12 +227,6 @@ object VitrinaKit {
             message = "Native purchase requires a trusted subscriber session.",
         )
         val cacheGeneration = active.cache.generation
-        if (!claimIdentityOperation(expected = current, bound = trusted)) {
-            return purchaseFailure(
-                code = VitrinaKitPurchaseErrorCode.IDENTITY_SESSION_INVALID,
-                message = "Subscriber identity changed before purchase started.",
-            )
-        }
         val placementId = active.cache.placementForProduct(key = trusted.cacheKey, product = product)
             ?: return purchaseFailure(
                 code = VitrinaKitPurchaseErrorCode.INVALID_REQUEST,
@@ -226,6 +241,7 @@ object VitrinaKit {
             placementId = placementId,
             product = product,
             expectedCacheGeneration = cacheGeneration,
+            identityLease = identityOperationLease(expected = current, bound = trusted),
         )
     }
 
@@ -245,12 +261,6 @@ object VitrinaKit {
             message = "Native restore requires a trusted subscriber session.",
         )
         val cacheGeneration = active.cache.generation
-        if (!claimIdentityOperation(expected = current, bound = trusted)) {
-            return restoreFailure(
-                code = VitrinaKitPurchaseErrorCode.IDENTITY_SESSION_INVALID,
-                message = "Subscriber identity changed before restore started.",
-            )
-        }
         val coordinator = active.coordinator ?: return restoreFailure(
             code = VitrinaKitPurchaseErrorCode.PROVIDER_NOT_SUPPORTED_BY_BUILD,
             message = "The configured adapter does not support native restore orchestration.",
@@ -258,6 +268,7 @@ object VitrinaKit {
         return coordinator.restore(
             scope = trusted.scope,
             expectedCacheGeneration = cacheGeneration,
+            identityLease = identityOperationLease(expected = current, bound = trusted),
         )
     }
 
@@ -276,10 +287,15 @@ object VitrinaKit {
             }
         }
         val cacheGeneration = active.cache.generation
-        val result = active.client.refreshSubscriber(
-            externalUserId = bound.externalUserId,
-            subscriberSession = bound.sessionToken,
-        ).toKitResult()
+        val result = lifecycleLease.runSideEffect {
+            if (!isSameIdentityLifecycle(current)) {
+                return@runSideEffect null
+            }
+            active.client.refreshSubscriber(
+                externalUserId = bound.externalUserId,
+                subscriberSession = bound.sessionToken,
+            ).toKitResult()
+        } ?: return staleIdentityTransition()
         if (result is VitrinaKitResult.Success) {
             if (!isSameIdentityLifecycle(current) || active.cache.generation != cacheGeneration) {
                 return staleIdentityTransition()
@@ -376,8 +392,14 @@ object VitrinaKit {
     }
 
     internal fun resetForTesting() {
-        val previous = replaceRuntime(null)
-        previous.runtime?.closePurchaseResources()
+        val reset = lifecycleLease.tryBlocking {
+            val previous = replaceRuntime(null)
+            previous.runtime?.closePurchaseResources()
+            true
+        }
+        if (reset == null) {
+            throw IllegalStateException("Cannot reset VitrinaKit while a lifecycle operation is in progress.")
+        }
     }
 
     private suspend fun identifyTrusted(
@@ -501,24 +523,30 @@ object VitrinaKit {
             ),
         )
         val cacheGeneration = active.cache.generation
-        if (!claimIdentityOperation(expected = current, bound = bound)) {
-            return staleIdentityTransition()
-        }
+        val identityLease = identityOperationLease(expected = current, bound = bound)
         val checkout = VitrinaKitHostedCheckoutOperation { receiptEmail, returnUrl ->
-            if (active.cache.generation != cacheGeneration ||
-                !claimIdentityOperation(expected = current, bound = bound)
-            ) {
-                return@VitrinaKitHostedCheckoutOperation staleIdentityTransition()
+            val result = runCatching {
+                identityLease.run {
+                    active.client.createCheckoutSession(
+                        request = CheckoutSessionRequest(
+                            externalUserId = bound.hostedExternalUserId,
+                            productId = product.productId,
+                            priceId = product.priceId,
+                            receiptEmail = receiptEmail,
+                            returnUrl = returnUrl,
+                        ),
+                        subscriberSession = bound.sessionToken,
+                    ).toKitResult()
+                }
+            }.getOrElse { throwable ->
+                if (throwable is CancellationException) throw throwable
+                if (throwable is IdentityLifecycleInvalidatedException) {
+                    return@VitrinaKitHostedCheckoutOperation staleIdentityTransition()
+                }
+                return@VitrinaKitHostedCheckoutOperation VitrinaKitResult.Failure(
+                    VitrinaKitError.Network("Network request failed."),
+                )
             }
-            val result = active.client.createCheckoutSession(
-                CheckoutSessionRequest(
-                    externalUserId = bound.hostedExternalUserId,
-                    productId = product.productId,
-                    priceId = product.priceId,
-                    receiptEmail = receiptEmail,
-                    returnUrl = returnUrl,
-                ),
-            ).toKitResult()
             if (!isSameIdentityLifecycle(current) || active.cache.generation != cacheGeneration) {
                 staleIdentityTransition()
             } else {
@@ -526,16 +554,21 @@ object VitrinaKit {
             }
         }
         val result = runCatching {
-            adapter.purchaseForBoundIdentity(
-                VitrinaKitHostedMigrationRequest(
-                    product = product,
-                    externalUserId = bound.hostedExternalUserId,
-                    checkout = checkout,
-                ),
-            )
+            identityLease.run {
+                adapter.purchaseForBoundIdentity(
+                    VitrinaKitHostedMigrationRequest(
+                        product = product,
+                        externalUserId = bound.hostedExternalUserId,
+                        checkout = checkout,
+                    ),
+                )
+            }
         }.getOrElse { throwable ->
             if (throwable is CancellationException) {
                 throw throwable
+            }
+            if (throwable is IdentityLifecycleInvalidatedException) {
+                return staleIdentityTransition()
             }
             return VitrinaKitResult.Failure(
                 VitrinaKitError.Provider("The hosted purchase adapter could not complete checkout."),
@@ -587,22 +620,19 @@ object VitrinaKit {
         }
     }
 
-    private fun claimIdentityOperation(
+    private fun identityOperationLease(
         expected: VitrinaKitLifecycleState,
         bound: BoundIdentity,
-    ): Boolean {
-        while (true) {
+    ): IdentityOperationLease = object : IdentityOperationLease {
+        override suspend fun <T> run(sideEffect: suspend () -> T): T = lifecycleLease.runSideEffect {
             val current = lifecycleState.value
             if (current.revision != expected.revision ||
                 current.runtime !== expected.runtime ||
                 current.identity !== bound
             ) {
-                return false
+                throw IdentityLifecycleInvalidatedException()
             }
-            val claimed = current.copy(operationSerial = current.operationSerial + 1)
-            if (lifecycleState.compareAndSet(expect = current, update = claimed)) {
-                return true
-            }
+            sideEffect()
         }
     }
 
@@ -637,7 +667,131 @@ private data class VitrinaKitLifecycleState(
     val revision: Long = 0,
     val runtime: VitrinaKitRuntime? = null,
     val identity: BoundIdentity? = null,
-    val operationSerial: Long = 0,
+)
+
+/**
+ * A coroutine-reentrant lifecycle mutex.
+ *
+ * Reentrancy requires admission from an active lexical ownership token so a hosted adapter and its
+ * structured children may call the core-owned checkout callback without taking the lease twice.
+ * Closing the token rejects new borrowers and drains admitted children before unlocking; escaped
+ * child contexts must therefore reacquire the mutex and revalidate lifecycle state.
+ * Synchronous transitions use [Mutex.tryLock] and fail without state changes while a side effect is
+ * suspended; callers can retry instead of blocking a Main/single-thread dispatcher.
+ */
+private class ReentrantLifecycleLease {
+    private val mutex = Mutex()
+
+    suspend fun <T> runSideEffect(block: suspend () -> T): T {
+        val held = currentCoroutineContext()[HeldLifecycleLease]
+        if (held?.owner === this && held.tryBorrow()) {
+            return try {
+                block()
+            } finally {
+                held.releaseBorrower()
+            }
+        }
+        mutex.lock()
+        return try {
+            runLocked(block = block)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    suspend fun <T> runTransitionExclusive(
+        onNested: () -> T,
+        block: suspend () -> T,
+    ): T {
+        val held = currentCoroutineContext()[HeldLifecycleLease]
+        if (held?.owner === this && held.isActive()) {
+            return onNested()
+        }
+        mutex.lock()
+        return try {
+            runLocked(block = block)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    fun <T> tryBlocking(block: suspend () -> T): T? {
+        if (!mutex.tryLock()) {
+            return null
+        }
+        return try {
+            runBlocking { runLocked(block = block) }
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    private suspend fun <T> runLocked(block: suspend () -> T): T {
+        val held = HeldLifecycleLease(owner = this)
+        return withContext(held) {
+            try {
+                block()
+            } finally {
+                withContext(NonCancellable) {
+                    held.closeAndDrain()
+                }
+            }
+        }
+    }
+}
+
+private class HeldLifecycleLease(
+    val owner: ReentrantLifecycleLease,
+) : AbstractCoroutineContextElement(HeldLifecycleLease) {
+    private val admission = MutableStateFlow(LeaseAdmission())
+
+    fun tryBorrow(): Boolean {
+        while (true) {
+            val current = admission.value
+            if (!current.open) {
+                return false
+            }
+            if (admission.compareAndSet(current, current.copy(borrowers = current.borrowers + 1))) {
+                return true
+            }
+        }
+    }
+
+    fun isActive(): Boolean = admission.value.active
+
+    fun releaseBorrower() {
+        while (true) {
+            val current = admission.value
+            val released = current.copy(borrowers = current.borrowers - 1)
+            if (admission.compareAndSet(current, released)) {
+                return
+            }
+        }
+    }
+
+    suspend fun closeAndDrain() {
+        while (true) {
+            val current = admission.value
+            if (!current.open || admission.compareAndSet(current, current.copy(open = false))) {
+                break
+            }
+        }
+        admission.first { state -> state.borrowers == 0 }
+        while (true) {
+            val current = admission.value
+            if (!current.active || admission.compareAndSet(current, current.copy(active = false))) {
+                return
+            }
+        }
+    }
+
+    companion object : CoroutineContext.Key<HeldLifecycleLease>
+}
+
+private data class LeaseAdmission(
+    val active: Boolean = true,
+    val open: Boolean = true,
+    val borrowers: Int = 0,
 )
 
 private data class IdentityTransition(
@@ -679,6 +833,10 @@ private fun <T> notActivated(): VitrinaKitResult<T> = VitrinaKitResult.Failure(
 
 private fun <T> identityRequired(): VitrinaKitResult<T> = VitrinaKitResult.Failure(
     VitrinaKitError.Auth("Subscriber identity is required. Call VitrinaKit.identify first."),
+)
+
+private fun <T> lifecycleBusy(): VitrinaKitResult<T> = VitrinaKitResult.Failure(
+    VitrinaKitError.Configuration("A subscriber lifecycle operation is in progress. Retry this call."),
 )
 
 private fun purchaseFailure(

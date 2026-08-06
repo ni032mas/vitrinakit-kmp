@@ -19,6 +19,7 @@ plugins {
 
 group = "ru.vitrina"
 version = "0.1.0-rc.6"
+extra["googlePlayBillingVersion"] = "9.1.0"
 
 subprojects {
     group = rootProject.group
@@ -86,6 +87,12 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
     @get:Input
     abstract val providerArtifactIds: ListProperty<String>
 
+    @get:Input
+    abstract val googlePlayAndroidArtifactId: Property<String>
+
+    @get:Input
+    abstract val googlePlayBillingVersion: Property<String>
+
     @TaskAction
     fun verify() {
         val repository = repositoryDirectory.get().asFile
@@ -114,7 +121,51 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
                             )
                         }
                     }
+                    if (pom.contains("<groupId>com.android.billingclient</groupId>")) {
+                        throw GradleException(
+                            "Core artifact POM must not depend on Google Play Billing: $pomFile",
+                        )
+                    }
                 }
+        }
+
+        val googlePlayPomDirectory = repository.resolve(
+            "ru/vitrina/${googlePlayAndroidArtifactId.get()}",
+        )
+        val googlePlayPoms = googlePlayPomDirectory.walkTopDown()
+            .filter { file -> file.extension == "pom" }
+            .toList()
+        if (googlePlayPoms.size != 1) {
+            throw GradleException(
+                "Expected one Google Play Android POM, found ${googlePlayPoms.size}: " +
+                    googlePlayPomDirectory,
+            )
+        }
+        val googlePlayPom = googlePlayPoms.single().readText()
+        val billingGroup = "<groupId>com.android.billingclient</groupId>"
+        val billingGroupIndex = googlePlayPom.indexOf(billingGroup)
+        val billingBlockStart = googlePlayPom.lastIndexOf("<dependency>", billingGroupIndex)
+        val billingBlockEnd = googlePlayPom.indexOf("</dependency>", billingGroupIndex)
+        val billingDependency = if (billingBlockStart >= 0 && billingBlockEnd >= 0) {
+            googlePlayPom.substring(billingBlockStart, billingBlockEnd)
+        } else {
+            ""
+        }
+        val hasExactRuntimeBilling = billingDependency.contains("<artifactId>billing</artifactId>") &&
+            billingDependency.contains("<version>${googlePlayBillingVersion.get()}</version>") &&
+            billingDependency.contains("<scope>runtime</scope>") &&
+            !billingDependency.contains("<scope>compile</scope>")
+        if (!hasExactRuntimeBilling) {
+            throw GradleException(
+                "Google Play Android POM must contain Billing " +
+                    "${googlePlayBillingVersion.get()} with runtime scope: ${googlePlayPoms.single()}",
+            )
+        }
+        if (billingGroupIndex != googlePlayPom.lastIndexOf(billingGroup)) {
+            throw GradleException(
+                "Google Play Android POM must contain exactly one Billing dependency: " +
+                    googlePlayPoms.single(),
+            )
         }
     }
 }
@@ -195,6 +246,8 @@ tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
     repositoryDirectory.set(layout.buildDirectory.dir("repository"))
     coreArtifactIds.set(requiredCoreArtifactIds.sorted())
     providerArtifactIds.set(requiredProviderArtifactIds.sorted())
+    googlePlayAndroidArtifactId.set("vitrinakit-googleplay-android$vitrinaKitPublicationSuffix")
+    googlePlayBillingVersion.set(rootProject.extra["googlePlayBillingVersion"] as String)
     dependsOn(
         "verifySdk",
         prepareReleaseArtifactRepository,

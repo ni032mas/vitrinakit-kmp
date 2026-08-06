@@ -36,6 +36,15 @@ interface VitrinaKitPurchaseAdapter {
     ): VitrinaKitAdapterPurchaseResult
 
     /**
+     * Marks [proof] as accepted by the server so provider-local recovery can suppress duplicates.
+     *
+     * Core invokes this only after a successful confirmation or restore response. The default is a
+     * no-op for adapters that do not maintain provider-local proof deduplication state.
+     */
+    @VitrinaKitPurchaseAdapterApi
+    fun onProofAccepted(proof: VitrinaKitProviderProof) = Unit
+
+    /**
      * Releases provider resources and cancels adapter-owned recovery work.
      *
      * The adapter must support lazy reinitialization if the SDK identifies a subscriber after logout.
@@ -92,9 +101,27 @@ class VitrinaKitPurchaseResumeData(val value: String) {
  * Safe adapter failure without provider payloads.
  *
  * @property message Redacted diagnostic message.
+ * @property retryable Whether retrying after provider recovery may succeed.
+ * @property supportReference Optional safe provider support code without provider payloads.
  */
 @VitrinaKitPurchaseAdapterApi
-data class VitrinaKitAdapterError(val message: String)
+data class VitrinaKitAdapterError(
+    val message: String,
+    val retryable: Boolean = false,
+    val supportReference: String? = null,
+)
+
+/**
+ * Carries a typed, redacted adapter failure across an adapter operation that cannot return a result.
+ *
+ * The exception message is fixed and never includes [error] fields or provider payloads.
+ *
+ * @property error Safe adapter failure metadata.
+ */
+@VitrinaKitPurchaseAdapterApi
+class VitrinaKitPurchaseAdapterException(
+    val error: VitrinaKitAdapterError,
+) : Exception("The purchase adapter operation failed.")
 
 /** Outcome returned from provider presentation or resume. */
 @VitrinaKitPurchaseAdapterApi

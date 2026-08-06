@@ -115,6 +115,9 @@ internal class PurchaseCoordinator(
                         if (throwable is IdentityLifecycleInvalidatedException) {
                             return@fold invalidatedIdentityFailure()
                         }
+                        if (throwable is VitrinaKitPurchaseAdapterException) {
+                            return@fold adapterPurchaseFailure(throwable.error)
+                        }
                         failure(
                             code = VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE,
                             message = "The purchase adapter could not complete presentation.",
@@ -158,6 +161,11 @@ internal class PurchaseCoordinator(
                         }
                         if (throwable is IdentityLifecycleInvalidatedException) {
                             return@fold invalidatedIdentityRestoreFailure()
+                        }
+                        if (throwable is VitrinaKitPurchaseAdapterException) {
+                            return@fold VitrinaKitRestoreResult.Failure(
+                                error = adapterError(throwable.error),
+                            )
                         }
                         VitrinaKitRestoreResult.Failure(
                             error = error(
@@ -341,10 +349,7 @@ internal class PurchaseCoordinator(
         }
 
         is VitrinaKitAdapterPurchaseResult.Failure -> {
-            failure(
-                code = VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE,
-                message = "The purchase adapter could not complete presentation.",
-            )
+            adapterPurchaseFailure(adapterResult.error)
         }
     }
 
@@ -360,12 +365,16 @@ internal class PurchaseCoordinator(
         identityLease: IdentityOperationLease,
     ): VitrinaKitPurchaseResult {
         val confirmed = identityLease.run {
-            api.confirmPurchase(
+            val result = api.confirmPurchase(
                 scope = scope,
                 attemptReference = attempt.reference,
                 idempotencyKey = confirmationKey,
                 proof = proof,
             )
+            if (result is PurchaseApiResult.Success) {
+                adapter.onProofAccepted(proof)
+            }
+            result
         }
         if (cache.generation != cacheGeneration) {
             return invalidatedIdentityFailure()
@@ -609,11 +618,15 @@ internal class PurchaseCoordinator(
             return invalidatedIdentityRestoreFailure()
         }
         val restored = identityLease.run {
-            api.restorePurchases(
+            val result = api.restorePurchases(
                 scope = scope,
                 purchases = purchases,
                 capability = adapter.capability,
             )
+            if (result is PurchaseApiResult.Success) {
+                purchases.forEach { purchase -> adapter.onProofAccepted(purchase.proof) }
+            }
+            result
         }
         return when (restored) {
             is PurchaseApiResult.Failure -> VitrinaKitRestoreResult.Failure(restored.error)
@@ -655,6 +668,22 @@ private fun invalidatedIdentityRestoreFailure(): VitrinaKitRestoreResult.Failure
 private fun failure(code: VitrinaKitPurchaseErrorCode, message: String): VitrinaKitPurchaseResult.Failure =
     VitrinaKitPurchaseResult.Failure(error = error(code = code, message = message))
 
+private fun adapterPurchaseFailure(error: VitrinaKitAdapterError): VitrinaKitPurchaseResult.Failure =
+    VitrinaKitPurchaseResult.Failure(error = adapterError(error))
+
+private fun adapterError(error: VitrinaKitAdapterError): VitrinaKitPurchaseError =
+    VitrinaKitPurchaseError(
+        code = VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE,
+        message = "The purchase adapter could not complete the provider operation.",
+        retryable = error.retryable,
+        supportReference = error.supportReference?.takeIf(::isSafeSupportReference),
+    )
+
+private fun isSafeSupportReference(value: String): Boolean =
+    value.length in 1..MaxSupportReferenceLength && value.all { character ->
+        character in 'A'..'Z' || character in '0'..'9' || character == '-'
+    }
+
 private fun error(code: VitrinaKitPurchaseErrorCode, message: String): VitrinaKitPurchaseError =
     VitrinaKitPurchaseError(
         code = code,
@@ -672,3 +701,4 @@ private fun newIdempotencyKey(): String = buildString {
 private const val IdempotencyRandomBytes = 32
 private const val HexRadix = 16
 private const val PurchaseAttemptExpiredReason = "purchase_attempt_expired"
+private const val MaxSupportReferenceLength = 64

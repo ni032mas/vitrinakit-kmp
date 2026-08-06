@@ -230,6 +230,78 @@ class PurchaseCoordinatorTest {
     }
 
     @Test
+    fun successfulAndServerPendingConfirmNotifyAdapterThatProofWasAccepted() = runTest {
+        val proof = VitrinaKitProviderProof("proof")
+        val adapter = FakePurchaseAdapter(
+            presentResult = VitrinaKitAdapterPurchaseResult.ProofReady(proof),
+        )
+
+        assertIs<VitrinaKitPurchaseResult.Success>(
+            coordinator(api = FakePurchaseApi(), adapter = adapter).purchase(trustedScope(), product()),
+        )
+
+        val pendingProof = VitrinaKitProviderProof("pending-proof")
+        adapter.presentResult = VitrinaKitAdapterPurchaseResult.ProofReady(pendingProof)
+        val pendingApi = FakePurchaseApi(
+            confirmResult = PurchaseApiResult.Success(
+                PurchaseConfirmation(
+                    attempt = attempt(status = VitrinaKitPurchaseAttemptStatus.PENDING),
+                    pending = true,
+                    profile = null,
+                ),
+            ),
+        )
+        assertIs<VitrinaKitPurchaseResult.Pending>(
+            coordinator(api = pendingApi, adapter = adapter).purchase(trustedScope(), product()),
+        )
+
+        assertEquals(listOf(proof, pendingProof), adapter.acceptedProofs)
+    }
+
+    @Test
+    fun failedConfirmDoesNotNotifyAdapterThatProofWasAccepted() = runTest {
+        val proof = VitrinaKitProviderProof("proof")
+        val adapter = FakePurchaseAdapter(
+            presentResult = VitrinaKitAdapterPurchaseResult.ProofReady(proof),
+        )
+        val api = FakePurchaseApi(
+            confirmResult = PurchaseApiResult.Failure(
+                purchaseError(VitrinaKitPurchaseErrorCode.NETWORK_ERROR),
+            ),
+        )
+
+        assertIs<VitrinaKitPurchaseResult.Failure>(
+            coordinator(api = api, adapter = adapter).purchase(trustedScope(), product()),
+        )
+
+        assertTrue(adapter.acceptedProofs.isEmpty())
+    }
+
+    @Test
+    fun adapterFailurePreservesRetryabilityWithoutExposingAdapterMessage() = runTest {
+        val coordinator = coordinator(
+            api = FakePurchaseApi(),
+            adapter = FakePurchaseAdapter(
+                presentResult = VitrinaKitAdapterPurchaseResult.Failure(
+                    VitrinaKitAdapterError(
+                        message = "Provider debug payload must stay private.",
+                        retryable = true,
+                        supportReference = "GPB--1",
+                    ),
+                ),
+            ),
+        )
+
+        val result = assertIs<VitrinaKitPurchaseResult.Failure>(
+            coordinator.purchase(scope = trustedScope(), product = product()),
+        )
+
+        assertTrue(result.error.retryable)
+        assertEquals("GPB--1", result.error.supportReference)
+        assertFalse(result.error.message.contains("debug payload"))
+    }
+
+    @Test
     fun adapterMismatchFailsBeforePresentation() = runTest {
         val api = FakePurchaseApi(
             startResult = PurchaseApiResult.Success(
@@ -463,6 +535,46 @@ class PurchaseCoordinatorTest {
     }
 
     @Test
+    fun restorePreservesTypedAdapterFailureWithoutExposingProviderText() = runTest {
+        val adapter = FakePurchaseAdapter(
+            restoreFailure = VitrinaKitPurchaseAdapterException(
+                VitrinaKitAdapterError(
+                    message = "Provider debug payload.",
+                    retryable = true,
+                    supportReference = "GPB--1",
+                ),
+            ),
+        )
+
+        val failure = assertIs<VitrinaKitRestoreResult.Failure>(
+            coordinator(api = FakePurchaseApi(), adapter = adapter).restore(trustedScope()),
+        )
+
+        assertEquals(VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE, failure.error.code)
+        assertTrue(failure.error.retryable)
+        assertEquals("GPB--1", failure.error.supportReference)
+        assertFalse(failure.error.message.contains("debug payload"))
+    }
+
+    @Test
+    fun successfulRestoreNotifiesAdapterForEveryAcceptedProof() = runTest {
+        val firstProof = VitrinaKitProviderProof("first")
+        val secondProof = VitrinaKitProviderProof("second")
+        val adapter = FakePurchaseAdapter(
+            restoreResult = listOf(
+                VitrinaKitRestorablePurchase("main", "one", firstProof),
+                VitrinaKitRestorablePurchase("main", "two", secondProof),
+            ),
+        )
+
+        assertIs<VitrinaKitRestoreResult.NoPurchases>(
+            coordinator(api = FakePurchaseApi(), adapter = adapter).restore(trustedScope()),
+        )
+
+        assertEquals(listOf(firstProof, secondProof), adapter.acceptedProofs)
+    }
+
+    @Test
     fun terminalAttemptsUseDistinctIdempotencyKeys() = runTest {
         val api = FakePurchaseApi(
             confirmResult = PurchaseApiResult.Success(
@@ -497,12 +609,14 @@ private class FakePurchaseAdapter(
     var presentResult: VitrinaKitAdapterPurchaseResult = VitrinaKitAdapterPurchaseResult.Cancelled,
     var resumeResult: VitrinaKitAdapterPurchaseResult = VitrinaKitAdapterPurchaseResult.Cancelled,
     var restoreResult: List<VitrinaKitRestorablePurchase> = emptyList(),
+    var restoreFailure: Throwable? = null,
     var onPresent: (suspend () -> VitrinaKitAdapterPurchaseResult)? = null,
 ) : VitrinaKitPurchaseAdapter {
     var presentCount = 0
     var resumeCount = 0
     var closeCount = 0
     var restoreQueryCount = 0
+    val acceptedProofs = mutableListOf<VitrinaKitProviderProof>()
 
     override suspend fun present(instruction: VitrinaKitPurchaseInstruction): VitrinaKitAdapterPurchaseResult {
         presentCount += 1
@@ -511,6 +625,7 @@ private class FakePurchaseAdapter(
 
     override suspend fun queryRestorablePurchases(): List<VitrinaKitRestorablePurchase> {
         restoreQueryCount += 1
+        restoreFailure?.let { failure -> throw failure }
         return restoreResult
     }
 
@@ -520,6 +635,10 @@ private class FakePurchaseAdapter(
     ): VitrinaKitAdapterPurchaseResult {
         resumeCount += 1
         return resumeResult
+    }
+
+    override fun onProofAccepted(proof: VitrinaKitProviderProof) {
+        acceptedProofs += proof
     }
 
     override fun close() {

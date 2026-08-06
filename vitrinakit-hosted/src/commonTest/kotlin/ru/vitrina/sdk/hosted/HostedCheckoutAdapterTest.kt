@@ -39,6 +39,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 
 class HostedCheckoutAdapterTest {
     @AfterTest
@@ -326,6 +327,23 @@ class HostedCheckoutAdapterTest {
 
         assertIs<VitrinaKitPurchaseResult.Success>(retried)
         assertEquals(1, retryLaunches)
+    }
+
+    @Test
+    fun coroutineCancellationAfterCheckoutCreationPreservesDurableResumeState() = runTest {
+        val store = RecordingResumeStateStore()
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { throw kotlinx.coroutines.CancellationException("cancelled") },
+                resumeStateStore = store,
+            ),
+        )
+
+        assertFailsWith<kotlinx.coroutines.CancellationException> {
+            adapter.purchase(hostedRequest())
+        }
+
+        assertEquals("checkout-1", store.state?.checkoutReference)
     }
 
     @Test

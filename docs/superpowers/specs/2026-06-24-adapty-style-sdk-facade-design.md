@@ -2,7 +2,7 @@
 
 ## Context
 
-VitrinaKit KMP SDK currently exposes serializable models, a low-level `VitrinaClient`, and a host-provided `VitrinaHttpClient` transport contract. LitoFit therefore implements its own Ktor transport and gateway wrapper around the SDK. That makes the SDK feel like a model package rather than a complete mobile integration library.
+VitrinaKit KMP SDK currently exposes serializable models, a low-level `VitrinaClient`, and a host-provided `VitrinaHttpClient` transport contract. Consumer applications therefore implement their own Ktor transport and gateway wrappers around the SDK. That makes the SDK feel like a model package rather than a complete mobile integration library.
 
 Adapty's mobile SDK shape is the target pattern: activate the SDK once with a public key, then call domain methods from a stable SDK facade. The app should not build SDK HTTP requests or own the SDK transport.
 
@@ -14,7 +14,7 @@ Adapty's mobile SDK shape is the target pattern: activate the SDK once with a pu
 - Add blocking wrappers for JVM/Android call sites that need synchronous calls.
 - Rename public SDK-facing models to `VitrinaKit*` names.
 - Move the default HTTP transport into the SDK while preserving injected transports for tests and advanced integrations.
-- Update LitoFit to consume the facade instead of maintaining `KtorVitrinaHttpClient`.
+- Let consumer applications use the facade instead of maintaining `KtorVitrinaHttpClient`.
 
 ## Non-Goals
 
@@ -39,7 +39,7 @@ val products = VitrinaKit.getPaywallProducts(paywall)
 val purchase = VitrinaKit.makePurchase(
     product = products.first(),
     userId = externalUserId,
-    returnUrl = "litofit://subscription/return",
+    returnUrl = "myapp://subscription/return",
 )
 val profile = VitrinaKit.getProfile(userId = externalUserId)
 ```
@@ -87,21 +87,22 @@ The old host-provided transport contract remains useful as a boundary:
 
 - SDK facade owns default transport creation.
 - `VitrinaClient` remains the low-level request/response client.
-- LitoFit stops defining `KtorVitrinaHttpClient`.
+- Consumer applications stop defining their own `KtorVitrinaHttpClient`.
 
 ## Error Handling
 
 SDK methods return `VitrinaKitResult<T>`, not exceptions, for network/API outcomes. Blocking wrappers return the same result shape. Configuration failures, missing activation, HTTP failures, and decoding failures map to `VitrinaKitError`.
 
-## LitoFit Integration
+## Consumer Integration
 
-LitoFit should:
+Consumer applications should:
 
 - Initialize `VitrinaKit` from the existing public key config.
-- Remove `features/subscription/data/vitrina/KtorVitrinaHttpClient.kt`.
+- Remove their app-owned SDK transport wrapper.
 - Replace DI bindings for `VitrinaHttpClient` and direct `VitrinaClient` construction with the SDK facade or an injected facade-compatible gateway.
-- Keep `VitrinaSubscriptionGateway` only for LitoFit-specific mapping from SDK models to existing subscription domain models.
-- Keep feature flag behavior from issue `ni032mas/LitoFit#804`.
+- Keep an application gateway only for product-specific mapping from SDK models
+  to application domain models.
+- Preserve existing application rollout controls during migration.
 
 ## Verification
 
@@ -110,8 +111,8 @@ SDK verification:
 - Add JVM tests for activation, missing activation, injected transport request mapping, model aliases, and blocking wrappers.
 - Run `./gradlew verifySdk`.
 
-LitFit verification:
+Consumer verification:
 
 - Update subscription tests that construct `VitrinaClient` or fake `VitrinaHttpClient`.
-- Run `./gradlew :features:subscription:allTests`.
-- Run `./gradlew detekt` if Kotlin production files changed.
+- Run the consumer application's subscription tests.
+- Run its Kotlin static-analysis gate if production files changed.

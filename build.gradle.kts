@@ -13,12 +13,13 @@ import org.gradle.api.tasks.TaskAction
 plugins {
     kotlin("multiplatform") version "2.3.20" apply false
     kotlin("plugin.serialization") version "2.3.20" apply false
+    id("com.android.application") version "9.0.1" apply false
     id("com.android.kotlin.multiplatform.library") version "9.0.1" apply false
     id("org.jetbrains.dokka") version "2.2.0" apply false
 }
 
 group = "ru.vitrina"
-version = "0.1.0-rc.6"
+version = "0.1.0-rc.7"
 extra["googlePlayBillingVersion"] = "9.1.0"
 extra["kotlinxCoroutinesVersion"] = "1.10.2"
 extra["ruStoreBomVersion"] = "2026.07.01"
@@ -70,6 +71,9 @@ private val vitrinaKitPublicationSuffix = when (vitrinaKitPublicationName) {
     )
 }
 private val requiredArtifactIds = expectedArtifactBaseIds.map { artifactId ->
+    "$artifactId$vitrinaKitPublicationSuffix"
+}.toSet()
+private val requiredModuleArtifactIds = moduleArtifactIds.map { artifactId ->
     "$artifactId$vitrinaKitPublicationSuffix"
 }.toSet()
 private val requiredCoreArtifactIds = coreArtifactIds.map { artifactId ->
@@ -369,6 +373,14 @@ tasks.register("verifyModuleTopology") {
                 ?.map { publication -> publication.artifactId }
                 .orEmpty()
         }
+        val omittedPublication = providers.gradleProperty("vitrinaKitTopologyOmitPublication").orNull
+        val effectivePublications = publications.filterNot { artifactId -> artifactId == omittedPublication }
+        val missingPublications = requiredModuleArtifactIds - effectivePublications.toSet()
+        if (missingPublications.isNotEmpty()) {
+            throw GradleException(
+                "Missing SDK root publications: ${missingPublications.sorted().joinToString()}",
+            )
+        }
         if (publications.size != publications.toSet().size) {
             throw GradleException("SDK artifact IDs must be unique: ${publications.joinToString()}")
         }
@@ -389,6 +401,104 @@ tasks.register("verifyModuleTopology") {
     }
 }
 
+tasks.register("verifyAndroidFlavorSample") {
+    group = "verification"
+    description = "Compiles and verifies the provider-isolated Android flavor sample."
+    dependsOn(
+        ":samples:android-flavors:app:compileGlobalDebugKotlin",
+        ":samples:android-flavors:app:compileRuDebugKotlin",
+    )
+
+    doLast {
+        val sampleRoot = rootProject.file("samples/android-flavors")
+        val requiredFiles = listOf(
+            "settings.gradle.kts",
+            "build.gradle.kts",
+            "app/build.gradle.kts",
+            "app/src/main/kotlin/ru/vitrina/sample/PurchaseFeature.kt",
+            "app/src/global/kotlin/ru/vitrina/sample/PurchaseAdapterFactory.kt",
+            "app/src/ru/kotlin/ru/vitrina/sample/PurchaseAdapterFactory.kt",
+        )
+        val missingFiles = requiredFiles.filterNot { relativePath ->
+            sampleRoot.resolve(relativePath).isFile
+        }
+        if (missingFiles.isNotEmpty()) {
+            throw GradleException(
+                "Android flavor sample is incomplete: ${missingFiles.sorted().joinToString()}",
+            )
+        }
+
+        val sampleProject = project(":samples:android-flavors:app")
+        fun resolvedComponents(configurationName: String): Set<String> =
+            sampleProject.configurations.getByName(configurationName)
+                .incoming
+                .resolutionResult
+                .allComponents
+                .map { component -> component.id.displayName }
+                .toSet()
+
+        val providerModules = setOf(
+            "vitrinakit-googleplay",
+            "vitrinakit-hosted",
+            "vitrinakit-rustore",
+        )
+        fun packagedProviders(configurationName: String): Set<String> {
+            val components = resolvedComponents(configurationName = configurationName)
+            return providerModules.filterTo(mutableSetOf()) { provider ->
+                components.any { component -> component.contains(provider) }
+            }
+        }
+
+        val globalProviders = packagedProviders("globalDebugRuntimeClasspath")
+        if (globalProviders != setOf("vitrinakit-googleplay")) {
+            throw GradleException(
+                "Global sample must package only Google Play, found: " +
+                    globalProviders.sorted().joinToString(),
+            )
+        }
+        val ruProviders = packagedProviders("ruDebugRuntimeClasspath")
+        if (ruProviders != setOf("vitrinakit-hosted")) {
+            throw GradleException(
+                "RU sample must package only hosted checkout, found: " +
+                    ruProviders.sorted().joinToString(),
+            )
+        }
+
+        val featureSource = sampleRoot.resolve(
+            "app/src/main/kotlin/ru/vitrina/sample/PurchaseFeature.kt",
+        ).readText()
+        val forbiddenFeatureImports = listOf(
+            "ru.vitrina.sdk.googleplay",
+            "ru.vitrina.sdk.hosted",
+            "ru.vitrina.sdk.rustore",
+        ).filter { providerPackage -> featureSource.contains("import $providerPackage") }
+        if (forbiddenFeatureImports.isNotEmpty()) {
+            throw GradleException(
+                "Feature code must import core only: ${forbiddenFeatureImports.joinToString()}",
+            )
+        }
+
+        val registrationMethods = listOf(
+            ".withPurchaseAdapter(",
+            ".withHostedCheckoutAdapter(",
+            ".withHostedMigrationAdapter(",
+        )
+        listOf("global", "ru").forEach { flavor ->
+            val factorySource = sampleRoot.resolve(
+                "app/src/$flavor/kotlin/ru/vitrina/sample/PurchaseAdapterFactory.kt",
+            ).readText()
+            val registrationCount = registrationMethods.sumOf { method ->
+                factorySource.windowed(method.length).count { candidate -> candidate == method }
+            }
+            if (registrationCount != 1) {
+                throw GradleException(
+                    "$flavor sample must register exactly one purchase adapter, found $registrationCount.",
+                )
+            }
+        }
+    }
+}
+
 tasks.register("test") {
     group = "verification"
     description = "Runs all SDK unit test targets."
@@ -405,6 +515,8 @@ tasks.register("verifySdk") {
     description = "Runs SDK tests and generated documentation checks."
     dependsOn(
         "test",
+        "verifyAndroidFlavorSample",
+        "verifyModuleTopology",
         ":vitrinakit-core:dokkaGenerate",
         ":vitrinakit-googleplay:dokkaGenerate",
         ":vitrinakit-hosted:dokkaGenerate",

@@ -19,6 +19,12 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":vitrinakit-core"))
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+            implementation("io.ktor:ktor-http:3.3.3")
+        }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
         }
     }
 }

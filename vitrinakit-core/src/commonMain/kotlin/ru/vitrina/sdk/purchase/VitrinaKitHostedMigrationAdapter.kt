@@ -1,6 +1,7 @@
 package ru.vitrina.sdk.purchase
 
 import ru.vitrina.sdk.model.VitrinaKitPaywallProduct
+import ru.vitrina.sdk.model.VitrinaKitProfile
 import ru.vitrina.sdk.model.VitrinaKitPurchase
 import ru.vitrina.sdk.model.VitrinaKitResult
 
@@ -17,6 +18,60 @@ fun interface VitrinaKitHostedCheckoutOperation {
         receiptEmail: String,
         returnUrl: String,
     ): VitrinaKitResult<VitrinaKitPurchase>
+}
+
+/** Core-owned authoritative profile refresh for the currently bound subscriber identity. */
+@VitrinaKitPurchaseAdapterApi
+fun interface VitrinaKitHostedProfileOperation {
+    /** Refreshes and caches the authoritative profile for the bound identity. */
+    suspend fun refresh(): VitrinaKitResult<VitrinaKitProfile>
+}
+
+/**
+ * Hosted purchase request whose network operations remain owned by the SDK core.
+ *
+ * @property product Product selected from the current subscriber's VitrinaKit paywall.
+ * @property checkout Bound checkout creation operation that does not expose transport credentials.
+ * @property profile Bound authoritative profile refresh operation.
+ */
+@VitrinaKitPurchaseAdapterApi
+data class VitrinaKitHostedPurchaseRequest(
+    val product: VitrinaKitPaywallProduct,
+    val checkout: VitrinaKitHostedCheckoutOperation,
+    val profile: VitrinaKitHostedProfileOperation,
+) {
+    /** Returns safe metadata while redacting core-owned operations. */
+    override fun toString(): String =
+        "VitrinaKitHostedPurchaseRequest(productKey=${product.productKey}, " +
+            "checkout=<redacted>, profile=<redacted>)"
+}
+
+/**
+ * Hosted restore request whose profile operation is bound to the current subscriber identity.
+ *
+ * @property profile Bound authoritative profile refresh operation.
+ */
+@VitrinaKitPurchaseAdapterApi
+data class VitrinaKitHostedRestoreRequest(
+    val profile: VitrinaKitHostedProfileOperation,
+) {
+    /** Returns a representation that does not expose the core callback. */
+    override fun toString(): String = "VitrinaKitHostedRestoreRequest(profile=<redacted>)"
+}
+
+/**
+ * Provider-neutral hosted purchase boundary implemented by the official hosted adapter artifact.
+ *
+ * Hosted checkout deliberately remains separate from native purchase capabilities because its
+ * server endpoint does not serialize a native provider purchase-attempt capability.
+ */
+@VitrinaKitPurchaseAdapterApi
+interface VitrinaKitHostedPurchaseAdapter : VitrinaKitHostedMigrationAdapter {
+    /** Presents and reconciles one hosted checkout for the bound identity. */
+    suspend fun purchase(request: VitrinaKitHostedPurchaseRequest): VitrinaKitPurchaseResult
+
+    /** Refreshes hosted purchase access for the bound identity. */
+    suspend fun restore(request: VitrinaKitHostedRestoreRequest): VitrinaKitRestoreResult
 }
 
 /**

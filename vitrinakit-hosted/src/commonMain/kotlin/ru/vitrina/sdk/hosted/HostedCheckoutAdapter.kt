@@ -112,6 +112,7 @@ class HostedCheckoutAdapter(
                 )
             }.getOrElse { throwable ->
                 if (throwable is CancellationException) throw throwable
+                configuration.resumeStateStore.clear()
                 return purchaseFailure(
                     code = VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE,
                     message = "Hosted checkout browser could not be opened.",
@@ -119,6 +120,7 @@ class HostedCheckoutAdapter(
             }
         }
         if (signal is HostedCheckoutLauncherSignal.Failed) {
+            configuration.resumeStateStore.clear()
             return purchaseFailure(
                 code = VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE,
                 message = "Hosted checkout browser could not be opened.",

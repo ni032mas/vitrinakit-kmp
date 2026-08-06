@@ -244,6 +244,91 @@ class HostedCheckoutAdapterTest {
     }
 
     @Test
+    fun thrownBrowserOpenFailureClearsResumeStateSoServerReuseRelaunches() = runTest {
+        val store = RecordingResumeStateStore()
+        val failedAdapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher {
+                    throw IllegalStateException("platform-secret-browser-detail")
+                },
+                resumeStateStore = store,
+            ),
+        )
+
+        val failed = failedAdapter.purchase(hostedRequest())
+
+        val failure = assertIs<VitrinaKitPurchaseResult.Failure>(failed)
+        assertEquals(VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE, failure.error.code)
+        assertFalse(failure.toString().contains("platform-secret-browser-detail"))
+        assertEquals(null, store.state)
+
+        var retryLaunches = 0
+        val retriedAdapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher {
+                    retryLaunches += 1
+                    HostedCheckoutLauncherSignal.Returned(
+                        HostedCheckoutReturnUri("vitrinakit-test://return"),
+                    )
+                },
+                resumeStateStore = store,
+            ),
+        )
+        val retried = retriedAdapter.purchase(
+            hostedRequest(
+                checkout = { checkoutSession(reused = true) },
+                profile = { activeProfile() },
+            ),
+        )
+
+        assertIs<VitrinaKitPurchaseResult.Success>(retried)
+        assertEquals(1, retryLaunches)
+    }
+
+    @Test
+    fun typedBrowserOpenFailureClearsResumeStateSoServerReuseRelaunches() = runTest {
+        val store = RecordingResumeStateStore()
+        val failedAdapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher {
+                    HostedCheckoutLauncherSignal.Failed(
+                        HostedCheckoutLauncherError(HostedCheckoutLauncherErrorCode.OPEN_FAILED),
+                    )
+                },
+                resumeStateStore = store,
+            ),
+        )
+
+        val failed = failedAdapter.purchase(hostedRequest())
+
+        val failure = assertIs<VitrinaKitPurchaseResult.Failure>(failed)
+        assertEquals(VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE, failure.error.code)
+        assertEquals(null, store.state)
+
+        var retryLaunches = 0
+        val retriedAdapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher {
+                    retryLaunches += 1
+                    HostedCheckoutLauncherSignal.Returned(
+                        HostedCheckoutReturnUri("vitrinakit-test://return"),
+                    )
+                },
+                resumeStateStore = store,
+            ),
+        )
+        val retried = retriedAdapter.purchase(
+            hostedRequest(
+                checkout = { checkoutSession(reused = true) },
+                profile = { activeProfile() },
+            ),
+        )
+
+        assertIs<VitrinaKitPurchaseResult.Success>(retried)
+        assertEquals(1, retryLaunches)
+    }
+
+    @Test
     fun restartResumeRepostsCheckoutAndPollsWithoutOpeningBrowserAgain() = runTest {
         val store = RecordingResumeStateStore()
         var checkoutCalls = 0

@@ -53,7 +53,7 @@ data class VitrinaHttpResponse(
 }
 
 /**
- * Host-provided HTTP transport used by [ru.vitrina.sdk.VitrinaClient].
+ * Host-provided HTTP transport used by advanced [ru.vitrina.sdk.VitrinaKitConfig] integrations.
  */
 interface VitrinaHttpClient {
     /**

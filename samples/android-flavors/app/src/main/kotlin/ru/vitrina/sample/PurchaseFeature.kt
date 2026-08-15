@@ -2,7 +2,6 @@ package ru.vitrina.sample
 
 import ru.vitrina.sdk.VitrinaKit
 import ru.vitrina.sdk.VitrinaKitConfig
-import ru.vitrina.sdk.identity.VitrinaKitIdentity
 import ru.vitrina.sdk.model.VitrinaKitPaywall
 import ru.vitrina.sdk.model.VitrinaKitPaywallProduct
 import ru.vitrina.sdk.model.VitrinaKitResult
@@ -13,14 +12,10 @@ class PurchaseFeature {
     fun activate(config: VitrinaKitConfig): VitrinaKitResult<Unit> = VitrinaKit.activate(config)
 
     suspend fun identifyAndLoadPaywall(
-        trustedSubscriberToken: String,
+        userId: String,
         placementId: String,
     ): VitrinaKitResult<VitrinaKitPaywall> {
-        return when (
-            val identified = VitrinaKit.identify(
-                VitrinaKitIdentity.TrustedToken(trustedSubscriberToken),
-            )
-        ) {
+        return when (val identified = VitrinaKit.identify(userId)) {
             is VitrinaKitResult.Success -> VitrinaKit.getPaywall(placementId)
             is VitrinaKitResult.Failure -> identified
         }

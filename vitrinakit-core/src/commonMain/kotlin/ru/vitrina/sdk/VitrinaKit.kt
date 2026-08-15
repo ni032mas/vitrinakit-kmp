@@ -3,11 +3,18 @@
 package ru.vitrina.sdk
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -16,8 +23,13 @@ import ru.vitrina.sdk.cache.SubscriberCache
 import ru.vitrina.sdk.cache.SubscriberCacheKey
 import ru.vitrina.sdk.http.KtorVitrinaHttpClient
 import ru.vitrina.sdk.http.VitrinaHttpClient
-import ru.vitrina.sdk.identity.VitrinaKitIdentity
+import ru.vitrina.sdk.installation.VitrinaKitInstallationIdStorage
+import ru.vitrina.sdk.installation.defaultInstallationIdStorage
+import ru.vitrina.sdk.installation.loadOrCreateInstallationId
+import ru.vitrina.sdk.installation.rotateInstallationId
 import ru.vitrina.sdk.model.VitrinaKitError
+import ru.vitrina.sdk.model.VitrinaKitAccessResolution
+import ru.vitrina.sdk.model.VitrinaKitIdentifyResult
 import ru.vitrina.sdk.model.VitrinaKitPaywall
 import ru.vitrina.sdk.model.VitrinaKitPaywallProduct
 import ru.vitrina.sdk.model.VitrinaKitProfile
@@ -45,8 +57,8 @@ import ru.vitrina.sdk.purchase.VitrinaKitHostedRestoreRequest
 /** Configuration for the high-level VitrinaKit SDK facade. */
 class VitrinaKitConfig private constructor(
     internal val publicApiKey: String,
-    internal val appId: String?,
     internal val httpClient: VitrinaHttpClient?,
+    internal val installationIdStorage: VitrinaKitInstallationIdStorage,
     internal val purchaseAdapters: List<VitrinaKitPurchaseAdapter>,
     internal val hostedMigrationAdapters: List<VitrinaKitHostedMigrationAdapter>,
 ) {
@@ -54,19 +66,19 @@ class VitrinaKitConfig private constructor(
     class Builder(
         private val publicApiKey: String,
     ) {
-        private var appId: String? = null
         private var httpClient: VitrinaHttpClient? = null
+        private var installationIdStorage: VitrinaKitInstallationIdStorage = defaultInstallationIdStorage()
         private val purchaseAdapters = mutableListOf<VitrinaKitPurchaseAdapter>()
         private val hostedMigrationAdapters = mutableListOf<VitrinaKitHostedMigrationAdapter>()
-
-        /** Sets an optional public app identifier for API versions that require it. */
-        fun withAppId(appId: String): Builder = apply {
-            this.appId = appId
-        }
 
         /** Sets a custom transport for tests or advanced integrations. */
         fun withHttpClient(httpClient: VitrinaHttpClient): Builder = apply {
             this.httpClient = httpClient
+        }
+
+        /** Overrides local installation identifier storage for custom platform integrations. */
+        fun withInstallationIdStorage(storage: VitrinaKitInstallationIdStorage): Builder = apply {
+            installationIdStorage = storage
         }
 
         /** Adds the provider adapter packaged by this application artifact. */
@@ -89,8 +101,8 @@ class VitrinaKitConfig private constructor(
         /** Builds the facade configuration. */
         fun build(): VitrinaKitConfig = VitrinaKitConfig(
             publicApiKey = publicApiKey,
-            appId = appId,
             httpClient = httpClient,
+            installationIdStorage = installationIdStorage,
             purchaseAdapters = purchaseAdapters.toList(),
             hostedMigrationAdapters = hostedMigrationAdapters.toList(),
         )
@@ -113,10 +125,15 @@ object VitrinaKit {
                 VitrinaKitError.Configuration("Exactly one purchase adapter is required."),
             )
         }
+        val installationId = loadOrCreateInstallationId(config.installationIdStorage).getOrElse {
+            return@tryBlocking VitrinaKitResult.Failure(
+                VitrinaKitError.Configuration("Installation identifier could not be persisted."),
+            )
+        }
         val client = VitrinaClient(
             config = VitrinaConfig(
-                appId = config.appId,
                 publishableKey = config.publicApiKey,
+                installationId = installationId,
             ),
             httpClient = config.httpClient ?: KtorVitrinaHttpClient(),
         )
@@ -135,57 +152,82 @@ object VitrinaKit {
             hostedMigrationAdapter = config.hostedMigrationAdapters.singleOrNull(),
             hostedPurchaseAdapter = config.hostedMigrationAdapters.singleOrNull() as? VitrinaKitHostedPurchaseAdapter,
             hostedOperationGuard = config.hostedMigrationAdapters.singleOrNull()?.let { Mutex() },
-            appId = config.appId,
             environment = VitrinaKitApiEnvironment.name,
+            installationIdStorage = config.installationIdStorage,
+            backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         )
-        val previous = replaceRuntime(nextRuntime)
-        previous.runtime?.closePurchaseResources()
+        val installationIdentity = installationIdentity(runtime = nextRuntime, installationId = installationId)
+        val previous = replaceRuntime(nextRuntime = nextRuntime, identity = installationIdentity)
+        previous.runtime?.closeRuntime()
+        seedCheckingProfile(runtime = nextRuntime, identity = installationIdentity)
+        scheduleAutomaticRestore(runtime = nextRuntime, identity = installationIdentity)
         VitrinaKitResult.Success(Unit)
     } ?: lifecycleBusy()
 
     /**
-     * Replaces the current subscriber identity and returns its authoritative profile.
+     * Associates the current installation with an application user and returns the merge outcome.
      *
-     * Trusted tokens are exchanged for an opaque subscriber session and are never retained.
+     * A merge changes the canonical subscriber identifier used for paywall variant assignment.
+     * Call [getPaywall] again after this method completes, even when a placement was already loaded.
      */
-    suspend fun identify(identity: VitrinaKitIdentity): VitrinaKitResult<VitrinaKitProfile> =
+    suspend fun identify(userId: String): VitrinaKitResult<VitrinaKitIdentifyResult> =
         lifecycleLease.runTransitionExclusive(
             onNested = { lifecycleBusy() },
-            block = { identifyLeased(identity = identity) },
+            block = { identifyUserLeased(userId = userId) },
         )
 
-    private suspend fun identifyLeased(identity: VitrinaKitIdentity): VitrinaKitResult<VitrinaKitProfile> {
-        val transition = beginIdentityTransition() ?: return notActivated()
-        val active = transition.state.runtime ?: return notActivated()
-        if (transition.hadIdentity) {
-            active.closePurchaseResources()
-        } else {
-            active.cache.clearAll()
-        }
-        active.client.clearPurchaseAttempts()
-        val cacheGeneration = active.cache.generation
-        return when (identity) {
-            is VitrinaKitIdentity.TrustedToken -> identifyTrusted(
-                runtime = active,
-                identity = identity,
-                expectedLifecycle = transition.state,
-                cacheGeneration = cacheGeneration,
-            )
-            is VitrinaKitIdentity.ExternalUserId -> identifyExternal(
-                runtime = active,
-                identity = identity,
-                expectedLifecycle = transition.state,
-                cacheGeneration = cacheGeneration,
-            )
+    /**
+     * Uses an opaque subscriber session minted by the integrating application's backend.
+     *
+     * The session becomes the sole authorization authority; the publishable key is not sent on
+     * requests authenticated with it. Sessions are retained in memory only.
+     */
+    suspend fun setSubscriberSession(session: String): VitrinaKitResult<VitrinaKitProfile> =
+        lifecycleLease.runTransitionExclusive(
+            onNested = { lifecycleBusy() },
+            block = { setSubscriberSessionLeased(session = session) },
+        )
+
+    /** Requests a one-time email verification code without exposing whether the address owns access. */
+    suspend fun requestEmailVerification(email: String): VitrinaKitResult<Unit> {
+        val current = lifecycleState.value
+        val active = current.runtime ?: return notActivated()
+        return lifecycleLease.runSideEffect {
+            if (!isSameIdentityLifecycle(current)) {
+                return@runSideEffect staleIdentityTransition()
+            }
+            active.client.requestEmailVerification(email = email).toKitResult()
         }
     }
 
-    /** Clears subscriber-scoped state and releases adapter resources. */
+    /** Confirms an email verification code, binds the returned session, and returns its profile. */
+    suspend fun confirmEmailVerification(email: String, code: String): VitrinaKitResult<VitrinaKitProfile> =
+        lifecycleLease.runTransitionExclusive(
+            onNested = { lifecycleBusy() },
+            block = { confirmEmailVerificationLeased(email = email, code = code) },
+        )
+
+    /**
+     * Clears subscriber state and rotates the installation identifier before returning to tier one.
+     *
+     * The previous installation is never reused after logout, so it cannot restore access belonging
+     * to the person who signed out. This intentionally resets paywall assignment and device analytics.
+     */
     fun logout(): VitrinaKitResult<Unit> = lifecycleLease.tryBlocking {
-        val previous = clearIdentity() ?: return@tryBlocking notActivated()
-        val active = previous.runtime ?: return@tryBlocking notActivated()
+        val current = lifecycleState.value
+        val active = current.runtime ?: return@tryBlocking notActivated()
+        val installationId = rotateInstallationId(active.installationIdStorage).getOrElse {
+            return@tryBlocking VitrinaKitResult.Failure(
+                VitrinaKitError.Configuration("Installation identifier could not be rotated."),
+            )
+        }
+        active.client.replaceInstallationId(installationId)
+        val replacement = installationIdentity(runtime = active, installationId = installationId)
+        replaceIdentity(identity = replacement) ?: return@tryBlocking notActivated()
         active.closePurchaseResources()
         active.cache.clearAll()
+        seedCheckingProfile(runtime = active, identity = replacement)
+        scheduleAutomaticRestore(runtime = active, identity = replacement)
         VitrinaKitResult.Success(Unit)
     } ?: lifecycleBusy()
 
@@ -250,20 +292,16 @@ object VitrinaKit {
                 cacheGeneration = cacheGeneration,
             )
         }
-        val trusted = bound as? BoundIdentity.Trusted ?: return purchaseFailure(
-            code = VitrinaKitPurchaseErrorCode.IDENTITY_POLICY_MISMATCH,
-            message = "Native purchase requires a trusted subscriber session.",
-        )
         val coordinator = active.coordinator ?: return purchaseFailure(
             code = VitrinaKitPurchaseErrorCode.PROVIDER_NOT_SUPPORTED_BY_BUILD,
             message = "The configured adapter does not support native purchase orchestration.",
         )
         return coordinator.purchase(
-            scope = trusted.scope,
+            scope = bound.scope,
             placementId = placementId,
             product = product,
             expectedCacheGeneration = cacheGeneration,
-            identityLease = identityOperationLease(expected = current, bound = trusted),
+            identityLease = identityOperationLease(expected = current, bound = bound),
         )
     }
 
@@ -288,38 +326,34 @@ object VitrinaKit {
                 cacheGeneration = cacheGeneration,
             )
         }
-        val trusted = bound as? BoundIdentity.Trusted ?: return restoreFailure(
-            code = VitrinaKitPurchaseErrorCode.IDENTITY_POLICY_MISMATCH,
-            message = "Native restore requires a trusted subscriber session.",
-        )
         val coordinator = active.coordinator ?: return restoreFailure(
             code = VitrinaKitPurchaseErrorCode.PROVIDER_NOT_SUPPORTED_BY_BUILD,
             message = "The configured adapter does not support native restore orchestration.",
         )
         return coordinator.restore(
-            scope = trusted.scope,
+            scope = bound.scope,
             expectedCacheGeneration = cacheGeneration,
-            identityLease = identityOperationLease(expected = current, bound = trusted),
+            identityLease = identityOperationLease(expected = current, bound = bound),
         )
     }
 
     /**
      * Reconciles one identity-bound pending native purchase when the app returns to foreground.
      *
-     * Returns `null` without querying a provider when no trusted subscriber has a pending attempt.
+     * Returns `null` without querying a provider when the subscriber has no pending attempt.
      * A non-null result has the same server-authoritative semantics as [purchase]; provider state
      * alone never grants access.
      */
     suspend fun onForeground(): VitrinaKitPurchaseResult? {
         val current = lifecycleState.value
         val active = current.runtime ?: return null
-        val trusted = current.identity as? BoundIdentity.Trusted ?: return null
+        val bound = current.identity ?: return null
         val coordinator = active.coordinator ?: return null
         val cacheGeneration = active.cache.generation
         return coordinator.onForeground(
-            scope = trusted.scope,
+            scope = bound.scope,
             expectedCacheGeneration = cacheGeneration,
-            identityLease = identityOperationLease(expected = current, bound = trusted),
+            identityLease = identityOperationLease(expected = current, bound = bound),
         )
     }
 
@@ -366,7 +400,7 @@ object VitrinaKit {
      * The [userId] parameter is ignored; call [identify] before this method.
      */
     @Deprecated(
-        message = "Call identify(identity), then getPaywall(placementId). Per-call user IDs are no longer accepted.",
+        message = "Call identify(userId), then getPaywall(placementId). Per-call user IDs are no longer accepted.",
         replaceWith = ReplaceWith("getPaywall(placementId)"),
     )
     suspend fun getPaywall(
@@ -382,7 +416,7 @@ object VitrinaKit {
      * Use [identify] and [purchase]. A provider-specific hosted adapter is required for hosted checkout.
      */
     @Deprecated(
-        message = "Call identify(identity), then purchase(product). Hosted details move to hosted adapter configuration.",
+        message = "Call identify(userId), then purchase(product). Hosted details move to hosted adapter configuration.",
         replaceWith = ReplaceWith("purchase(product)"),
     )
     suspend fun makePurchase(
@@ -400,7 +434,7 @@ object VitrinaKit {
      * The [userId] parameter is ignored; call [identify] before this method.
      */
     @Deprecated(
-        message = "Call identify(identity), then getProfile(). Per-call user IDs are no longer accepted.",
+        message = "Call identify(userId), then getProfile(). Per-call user IDs are no longer accepted.",
         replaceWith = ReplaceWith("getProfile()"),
     )
     suspend fun getProfile(userId: String): VitrinaKitResult<VitrinaKitProfile> {
@@ -409,7 +443,7 @@ object VitrinaKit {
 
     /** Blocking legacy variant of [getPaywall]. */
     @Deprecated(
-        message = "Call identify(identity), then getPaywall(placementId) from a coroutine.",
+        message = "Call identify(userId), then getPaywall(placementId) from a coroutine.",
         replaceWith = ReplaceWith("getPaywall(placementId)"),
     )
     fun getPaywallBlocking(
@@ -421,7 +455,7 @@ object VitrinaKit {
 
     /** Blocking legacy variant of [makePurchase]. */
     @Deprecated(
-        message = "Call identify(identity), then purchase(product) from a coroutine.",
+        message = "Call identify(userId), then purchase(product) from a coroutine.",
         replaceWith = ReplaceWith("purchase(product)"),
     )
     fun makePurchaseBlocking(
@@ -435,7 +469,7 @@ object VitrinaKit {
 
     /** Blocking legacy variant of [getProfile]. */
     @Deprecated(
-        message = "Call identify(identity), then getProfile() from a coroutine.",
+        message = "Call identify(userId), then getProfile() from a coroutine.",
         replaceWith = ReplaceWith("getProfile()"),
     )
     fun getProfileBlocking(userId: String): VitrinaKitResult<VitrinaKitProfile> = runBlocking {
@@ -443,98 +477,96 @@ object VitrinaKit {
     }
 
     internal fun resetForTesting() {
-        val reset = lifecycleLease.tryBlocking {
-            val previous = replaceRuntime(null)
-            previous.runtime?.closePurchaseResources()
-            true
-        }
-        if (reset == null) {
-            throw IllegalStateException("Cannot reset VitrinaKit while a lifecycle operation is in progress.")
+        runBlocking {
+            lifecycleLease.runTransitionExclusive(
+                onNested = { false },
+                block = {
+                    val previous = replaceRuntime(nextRuntime = null, identity = null)
+                    previous.runtime?.closeRuntime()
+                    true
+                },
+            )
         }
     }
 
-    private suspend fun identifyTrusted(
-        runtime: VitrinaKitRuntime,
-        identity: VitrinaKitIdentity.TrustedToken,
-        expectedLifecycle: VitrinaKitLifecycleState,
-        cacheGeneration: Long,
-    ): VitrinaKitResult<VitrinaKitProfile> {
-        if (identity.value.isBlank()) {
-            return VitrinaKitResult.Failure(VitrinaKitError.Auth("Trusted token is required."))
+    private suspend fun identifyUserLeased(userId: String): VitrinaKitResult<VitrinaKitIdentifyResult> {
+        if (userId.isBlank()) {
+            return VitrinaKitResult.Failure(VitrinaKitError.Auth("User ID is required."))
         }
-        val exchange = runtime.client.exchangeSubscriberSession(trustedToken = identity.value)
-        val session = when (exchange) {
-            is VitrinaResult.Success -> exchange.value
-            is VitrinaResult.Failure -> return VitrinaKitResult.Failure(exchange.error.toKitError())
-        }
-        val cacheKey = SubscriberCacheKey(
-            environment = runtime.environment,
-            appId = runtime.appId,
-            subscriberReference = session.subscriberId,
-            subscriberSession = session.sessionToken,
-        )
-        val scope = SubscriberScope(
-            cacheKey = cacheKey,
-            sessionToken = session.sessionToken,
-            purchaseAttemptGeneration = runtime.client.purchaseAttemptGeneration,
-        )
-        val profile = runtime.client.refreshSubscriber(
-            externalUserId = null,
-            subscriberSession = session.sessionToken,
-        )
-        return when (profile) {
-            is VitrinaResult.Failure -> VitrinaKitResult.Failure(profile.error.toKitError())
+        val transition = beginIdentityTransition() ?: return notActivated()
+        val active = transition.state.runtime ?: return notActivated()
+        active.closePurchaseResources()
+        active.cache.clearAll()
+        active.client.clearPurchaseAttempts()
+        val cacheGeneration = active.cache.generation
+        return when (val result = active.client.identifySubscriber(userId = userId)) {
+            is VitrinaResult.Failure -> VitrinaKitResult.Failure(result.error.toKitError())
             is VitrinaResult.Success -> {
-                val bound = BoundIdentity.Trusted(
-                    subscriberExternalUserId = session.externalUserId,
-                    sessionToken = session.sessionToken,
-                    cacheKey = cacheKey,
-                    scope = scope,
-                )
-                bindIdentityIfCurrent(
-                    runtime = runtime,
-                    expectedLifecycle = expectedLifecycle,
-                    cacheGeneration = cacheGeneration,
-                    bound = bound,
-                    profile = profile.value,
-                )
+                val bound = externalIdentity(runtime = active, userId = userId)
+                when (
+                    val binding = bindIdentityIfCurrent(
+                        runtime = active,
+                        expectedLifecycle = transition.state,
+                        cacheGeneration = cacheGeneration,
+                        bound = bound,
+                        profile = result.value.profile,
+                    )
+                ) {
+                    is VitrinaKitResult.Failure -> binding
+                    is VitrinaKitResult.Success -> VitrinaKitResult.Success(
+                        result.value.copy(profile = binding.value),
+                    )
+                }
             }
         }
     }
 
-    private suspend fun identifyExternal(
-        runtime: VitrinaKitRuntime,
-        identity: VitrinaKitIdentity.ExternalUserId,
-        expectedLifecycle: VitrinaKitLifecycleState,
-        cacheGeneration: Long,
-    ): VitrinaKitResult<VitrinaKitProfile> {
-        if (identity.value.isBlank()) {
-            return VitrinaKitResult.Failure(VitrinaKitError.Auth("External user ID is required."))
+    private suspend fun setSubscriberSessionLeased(session: String): VitrinaKitResult<VitrinaKitProfile> {
+        if (session.isBlank()) {
+            return VitrinaKitResult.Failure(VitrinaKitError.Auth("Subscriber session is required."))
         }
-        val cacheKey = SubscriberCacheKey(
-            environment = runtime.environment,
-            appId = runtime.appId,
-            subscriberReference = identity.value,
-        )
-        val profile = runtime.client.refreshSubscriber(
-            externalUserId = identity.value,
-            subscriberSession = null,
-        )
+        val transition = beginIdentityTransition() ?: return notActivated()
+        val active = transition.state.runtime ?: return notActivated()
+        active.closePurchaseResources()
+        active.cache.clearAll()
+        active.client.clearPurchaseAttempts()
+        val cacheGeneration = active.cache.generation
+        val profile = active.client.refreshSubscriber(externalUserId = null, subscriberSession = session)
         return when (profile) {
             is VitrinaResult.Failure -> VitrinaKitResult.Failure(profile.error.toKitError())
-            is VitrinaResult.Success -> {
-                val bound = BoundIdentity.External(
-                    externalUserId = identity.value,
-                    cacheKey = cacheKey,
-                )
-                bindIdentityIfCurrent(
-                    runtime = runtime,
-                    expectedLifecycle = expectedLifecycle,
-                    cacheGeneration = cacheGeneration,
-                    bound = bound,
-                    profile = profile.value,
-                )
-            }
+            is VitrinaResult.Success -> bindIdentityIfCurrent(
+                runtime = active,
+                expectedLifecycle = transition.state,
+                cacheGeneration = cacheGeneration,
+                bound = sessionIdentity(runtime = active, session = session, profile = profile.value),
+                profile = profile.value,
+            )
+        }
+    }
+
+    private suspend fun confirmEmailVerificationLeased(
+        email: String,
+        code: String,
+    ): VitrinaKitResult<VitrinaKitProfile> {
+        val transition = beginIdentityTransition() ?: return notActivated()
+        val active = transition.state.runtime ?: return notActivated()
+        active.closePurchaseResources()
+        active.cache.clearAll()
+        active.client.clearPurchaseAttempts()
+        val cacheGeneration = active.cache.generation
+        return when (val confirmation = active.client.confirmEmailVerification(email = email, code = code)) {
+            is VitrinaResult.Failure -> VitrinaKitResult.Failure(confirmation.error.toKitError())
+            is VitrinaResult.Success -> bindIdentityIfCurrent(
+                runtime = active,
+                expectedLifecycle = transition.state,
+                cacheGeneration = cacheGeneration,
+                bound = sessionIdentity(
+                    runtime = active,
+                    session = confirmation.value.sessionToken,
+                    profile = confirmation.value.profile,
+                ),
+                profile = confirmation.value.profile,
+            )
         }
     }
 
@@ -883,14 +915,130 @@ object VitrinaKit {
         return result
     }
 
-    private fun replaceRuntime(nextRuntime: VitrinaKitRuntime?): VitrinaKitLifecycleState {
+    private fun installationIdentity(
+        runtime: VitrinaKitRuntime,
+        installationId: String,
+    ): BoundIdentity.Installation {
+        val cacheKey = SubscriberCacheKey(
+            environment = runtime.environment,
+            subscriberReference = installationId,
+        )
+        return BoundIdentity.Installation(
+            installationId = installationId,
+            cacheKey = cacheKey,
+            scope = SubscriberScope(
+                cacheKey = cacheKey,
+                purchaseAttemptGeneration = runtime.client.purchaseAttemptGeneration,
+            ),
+        )
+    }
+
+    private fun externalIdentity(runtime: VitrinaKitRuntime, userId: String): BoundIdentity.External {
+        val cacheKey = SubscriberCacheKey(
+            environment = runtime.environment,
+            subscriberReference = userId,
+        )
+        return BoundIdentity.External(
+            externalUserId = userId,
+            cacheKey = cacheKey,
+            scope = SubscriberScope(
+                cacheKey = cacheKey,
+                subscriberId = userId,
+                purchaseAttemptGeneration = runtime.client.purchaseAttemptGeneration,
+            ),
+        )
+    }
+
+    private fun sessionIdentity(
+        runtime: VitrinaKitRuntime,
+        session: String,
+        profile: VitrinaKitProfile,
+    ): BoundIdentity.Session {
+        val cacheKey = SubscriberCacheKey(
+            environment = runtime.environment,
+            subscriberReference = profile.externalUserId.ifBlank { "subscriber-session" },
+            subscriberSession = session,
+        )
+        return BoundIdentity.Session(
+            subscriberExternalUserId = profile.externalUserId,
+            sessionToken = session,
+            cacheKey = cacheKey,
+            scope = SubscriberScope(
+                cacheKey = cacheKey,
+                sessionToken = session,
+                purchaseAttemptGeneration = runtime.client.purchaseAttemptGeneration,
+            ),
+        )
+    }
+
+    private fun seedCheckingProfile(runtime: VitrinaKitRuntime, identity: BoundIdentity) {
+        if (runtime.coordinator == null) {
+            return
+        }
+        runtime.cache.replaceProfile(
+            key = identity.cacheKey,
+            profile = VitrinaKitProfile(
+                externalUserId = identity.externalUserId.orEmpty(),
+                hasAccess = false,
+                entitlements = emptyList(),
+                accessResolution = VitrinaKitAccessResolution.CHECKING,
+            ),
+        )
+    }
+
+    private fun scheduleAutomaticRestore(runtime: VitrinaKitRuntime, identity: BoundIdentity) {
+        val coordinator = runtime.coordinator ?: return
+        val expected = lifecycleState.value
+        val cacheGeneration = runtime.cache.generation
+        runtime.automaticRestoreJob?.cancel()
+        runtime.automaticRestoreJob = runtime.backgroundScope.launch {
+            val result = coordinator.restore(
+                scope = identity.scope,
+                expectedCacheGeneration = cacheGeneration,
+                identityLease = identityOperationLease(expected = expected, bound = identity),
+            )
+            if (isSameIdentityLifecycle(expected)) {
+                runtime.cache.profile(key = identity.cacheKey)?.let { profile ->
+                    runtime.cache.replaceProfileIfCurrent(
+                        key = identity.cacheKey,
+                        profile = profile.copy(
+                            accessResolution = if (result is VitrinaKitRestoreResult.Failure) {
+                                VitrinaKitAccessResolution.UNAVAILABLE
+                            } else {
+                                VitrinaKitAccessResolution.CURRENT
+                            },
+                        ),
+                        generation = cacheGeneration,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun replaceRuntime(
+        nextRuntime: VitrinaKitRuntime?,
+        identity: BoundIdentity?,
+    ): VitrinaKitLifecycleState {
         while (true) {
             val current = lifecycleState.value
             val next = VitrinaKitLifecycleState(
                 revision = current.revision + 1,
                 runtime = nextRuntime,
-                identity = null,
+                identity = identity,
             )
+            if (lifecycleState.compareAndSet(expect = current, update = next)) {
+                return current
+            }
+        }
+    }
+
+    private fun replaceIdentity(identity: BoundIdentity): VitrinaKitLifecycleState? {
+        while (true) {
+            val current = lifecycleState.value
+            if (current.runtime == null) {
+                return null
+            }
+            val next = current.copy(revision = current.revision + 1, identity = identity)
             if (lifecycleState.compareAndSet(expect = current, update = next)) {
                 return current
             }
@@ -905,20 +1053,7 @@ object VitrinaKit {
             }
             val next = current.copy(revision = current.revision + 1, identity = null)
             if (lifecycleState.compareAndSet(expect = current, update = next)) {
-                return IdentityTransition(state = next, hadIdentity = current.identity != null)
-            }
-        }
-    }
-
-    private fun clearIdentity(): VitrinaKitLifecycleState? {
-        while (true) {
-            val current = lifecycleState.value
-            if (current.runtime == null) {
-                return null
-            }
-            val next = current.copy(revision = current.revision + 1, identity = null)
-            if (lifecycleState.compareAndSet(expect = current, update = next)) {
-                return current
+                return IdentityTransition(state = next)
             }
         }
     }
@@ -970,13 +1105,22 @@ private data class VitrinaKitRuntime(
     val hostedMigrationAdapter: VitrinaKitHostedMigrationAdapter?,
     val hostedPurchaseAdapter: VitrinaKitHostedPurchaseAdapter?,
     val hostedOperationGuard: Mutex?,
-    val appId: String?,
     val environment: String,
+    val installationIdStorage: VitrinaKitInstallationIdStorage,
+    val backgroundScope: CoroutineScope,
+    var automaticRestoreJob: Job? = null,
 ) {
-    fun closePurchaseResources() {
+    suspend fun closePurchaseResources() {
+        automaticRestoreJob?.cancelAndJoin()
+        automaticRestoreJob = null
         client.clearPurchaseAttempts()
         coordinator?.close()
         hostedMigrationAdapter?.close()
+    }
+
+    suspend fun closeRuntime() {
+        closePurchaseResources()
+        backgroundScope.cancel()
     }
 }
 
@@ -1145,7 +1289,6 @@ private data class LeaseAdmission(
 
 private data class IdentityTransition(
     val state: VitrinaKitLifecycleState,
-    val hadIdentity: Boolean,
 )
 
 private sealed interface BoundIdentity {
@@ -1153,23 +1296,35 @@ private sealed interface BoundIdentity {
     val hostedExternalUserId: String
     val sessionToken: String?
     val cacheKey: SubscriberCacheKey
+    val scope: SubscriberScope
 
-    data class Trusted(
+    data class Installation(
+        val installationId: String,
+        override val cacheKey: SubscriberCacheKey,
+        override val scope: SubscriberScope,
+    ) : BoundIdentity {
+        override val externalUserId: String? = null
+        override val hostedExternalUserId: String = ""
+        override val sessionToken: String? = null
+    }
+
+    data class Session(
         val subscriberExternalUserId: String,
         override val sessionToken: String,
         override val cacheKey: SubscriberCacheKey,
-        val scope: SubscriberScope,
+        override val scope: SubscriberScope,
     ) : BoundIdentity {
         override val externalUserId: String? = null
         override val hostedExternalUserId: String = subscriberExternalUserId
 
         override fun toString(): String =
-            "Trusted(externalUserId=$subscriberExternalUserId, sessionToken=<redacted>, cacheKey=$cacheKey)"
+            "Session(externalUserId=<redacted>, sessionToken=<redacted>, cacheKey=$cacheKey)"
     }
 
     data class External(
         override val externalUserId: String,
         override val cacheKey: SubscriberCacheKey,
+        override val scope: SubscriberScope,
     ) : BoundIdentity {
         override val sessionToken: String? = null
         override val hostedExternalUserId: String = externalUserId

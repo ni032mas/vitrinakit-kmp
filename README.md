@@ -83,18 +83,16 @@ Hosted checkout uses `withHostedCheckoutAdapter(...)` instead. Activation
 rejects a blank publishable key and any configuration with zero or multiple
 adapters.
 
-After the user signs in, the application backend exchanges that application
-session for a short-lived trusted subscriber token. Pass it directly to
-`identify`; never persist or log it in the app.
+The SDK starts in installation scope and immediately begins a non-blocking
+store restore. Use `profile.accessResolution` when a screen must distinguish
+confirmed access from the initial `CHECKING` state.
+
+After the application user signs in, associate the installation with the
+application's stable user ID. Because a merge can change paywall assignment,
+load the paywall again after `identify` succeeds.
 
 ```kotlin
-val subscriberToken = customerBackend.fetchTrustedSubscriberToken()
-
-when (
-    VitrinaKit.identify(
-        VitrinaKitIdentity.TrustedToken(subscriberToken),
-    )
-) {
+when (VitrinaKit.identify(userId = currentUser.id)) {
     is VitrinaKitResult.Success -> Unit
     is VitrinaKitResult.Failure -> showIdentityError()
 }
@@ -126,6 +124,14 @@ val recoveredPurchase = VitrinaKit.onForeground()
 // Call when the application account signs out.
 VitrinaKit.logout()
 ```
+
+If the application backend mints opaque VitrinaKit subscriber sessions, bind
+one with `VitrinaKit.setSubscriberSession(session)`. Session-authenticated
+requests use that bearer session as their only authorization authority. Email
+recovery is available through `requestEmailVerification` and
+`confirmEmailVerification`; the request result never reveals whether an
+address owns access. Logout clears account state and creates a new installation
+ID, so the previous installation cannot restore another person's access.
 
 Only log stable error code, retryability, and opaque support reference. Do not
 log identity values, provider evidence, checkout URLs, or provider payloads.

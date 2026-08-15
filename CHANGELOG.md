@@ -2,12 +2,17 @@
 
 ## Unreleased
 
+## 0.1.0-rc.8
+
+Subscriber identity tiers and recovery release candidate.
+
 ### Added
 
 - Persistent installation identities on JVM and iOS, with automatic
   non-blocking store restoration and explicit access-resolution state.
-- Subscriber association through `identify(userId)`, opaque backend sessions,
-  and privacy-safe email verification recovery.
+- Subscriber association through `identify(userId)`, opaque backend sessions
+  via `setSubscriberSession(session)`, and privacy-safe email verification
+  recovery through `requestEmailVerification` and `confirmEmailVerification`.
 
 ### Changed
 
@@ -18,7 +23,12 @@
 
 ### Removed
 
-- Signed client subscriber tokens and the obsolete separate application ID.
+- The signed client subscriber-token identity path. Update integrations to call
+  `identify(userId)` for application-user association, or bind an opaque
+  backend-minted session with `setSubscriberSession(session)`; do not supply a
+  signed subscriber token to the SDK.
+- The separate application ID from client configuration. Activation now uses
+  the publishable key and the SDK-managed installation ID.
 
 ## 0.1.0-rc.7
 

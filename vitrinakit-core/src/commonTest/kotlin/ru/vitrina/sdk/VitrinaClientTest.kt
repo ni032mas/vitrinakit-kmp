@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -892,6 +893,10 @@ class VitrinaClientTest {
     fun logoutReturnsBusyDuringSuspendedIdentifyThenClearsAfterRetry() = runTest {
         val profileRequested = CompletableDeferred<Unit>()
         val releaseProfile = CompletableDeferred<Unit>()
+        val initialRestoreStarted = CompletableDeferred<Unit>()
+        val releaseInitialRestore = CompletableDeferred<Unit>()
+        val logoutRestoreStarted = CompletableDeferred<Unit>()
+        val releaseLogoutRestore = CompletableDeferred<Unit>()
         val http = object : VitrinaHttpClient {
             override suspend fun send(request: VitrinaHttpRequest): VitrinaHttpResponse = when (request.path) {
                 "/api/v1/subscriber/me" -> {
@@ -902,35 +907,54 @@ class VitrinaClientTest {
                 else -> error("Unexpected request: ${request.path}")
             }
         }
+        val adapter = FacadePurchaseAdapter(
+            beforeAutomaticRestoreQuery = {
+                initialRestoreStarted.complete(Unit)
+                releaseInitialRestore.await()
+            },
+            beforeRestoreQuery = {
+                logoutRestoreStarted.complete(Unit)
+                releaseLogoutRestore.await()
+            },
+        )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
                 .withHttpClient(http)
-                .withPurchaseAdapter(FacadePurchaseAdapter())
+                .withPurchaseAdapter(adapter)
                 .build(),
         )
+        initialRestoreStarted.await()
+        releaseInitialRestore.complete(Unit)
 
         val identifying = async {
             VitrinaKit.setSubscriberSession(session = "opaque-session")
         }
         profileRequested.await()
         val busy = VitrinaKit.logout()
-        assertIs<VitrinaKitError.Configuration>(assertIs<VitrinaKitResult.Failure>(busy).error)
-        releaseProfile.complete(Unit)
+        try {
+            assertIs<VitrinaKitError.Configuration>(assertIs<VitrinaKitResult.Failure>(busy).error)
+        } finally {
+            releaseProfile.complete(Unit)
+        }
 
         assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(identifying.await())
         assertIs<VitrinaKitResult.Success<Unit>>(VitrinaKit.logout())
-        assertEquals(
-            VitrinaKitAccessResolution.CHECKING,
-            assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(VitrinaKit.getProfile()).value.accessResolution,
-        )
+        logoutRestoreStarted.await()
+        try {
+            assertEquals(
+                VitrinaKitAccessResolution.CHECKING,
+                assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(VitrinaKit.getProfile()).value.accessResolution,
+            )
+        } finally {
+            releaseLogoutRestore.complete(Unit)
+        }
     }
 
-    @OptIn(VitrinaKitPurchaseAdapterApi::class)
     @Test
-    fun logoutReturnsBusyDuringProfileRefreshThenClearsAfterRetry() = runTest {
+    fun logoutReturnsBusyUntilCancelledProfileRefreshCleanupCompletes() = runTest {
         val refreshRequested = CompletableDeferred<Unit>()
-        val releaseRefresh = CompletableDeferred<Unit>()
-        var profileRequestCount = 0
+        val cleanupStarted = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
         val http = object : VitrinaHttpClient {
             override suspend fun send(request: VitrinaHttpRequest): VitrinaHttpResponse = when (request.path) {
                 "/api/v1/subscriber/identify" -> VitrinaHttpResponse(
@@ -938,10 +962,15 @@ class VitrinaClientTest {
                     identifyResponseJson("user-1"),
                 )
                 "/api/v1/subscriber/me" -> {
-                    profileRequestCount += 1
                     refreshRequested.complete(Unit)
-                    releaseRefresh.await()
-                    VitrinaHttpResponse(HttpStatusOk, subscriberJson)
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable) {
+                            cleanupStarted.complete(Unit)
+                            releaseCleanup.await()
+                        }
+                    }
                 }
                 else -> error("Unexpected request: ${request.path}")
             }
@@ -949,9 +978,112 @@ class VitrinaClientTest {
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
                 .withHttpClient(http)
-                .withPurchaseAdapter(FacadePurchaseAdapter())
+                .withHostedMigrationAdapter(FacadeHostedMigrationAdapter())
                 .build(),
         )
+        assertIs<VitrinaKitResult.Success<VitrinaKitIdentifyResult>>(
+            VitrinaKit.identify(userId = "user-1"),
+        )
+
+        val refreshing = async { VitrinaKit.getProfile(forceRefresh = true) }
+        refreshRequested.await()
+        refreshing.cancel()
+        cleanupStarted.await()
+
+        val busy = VitrinaKit.logout()
+        try {
+            assertIs<VitrinaKitError.Configuration>(assertIs<VitrinaKitResult.Failure>(busy).error)
+        } finally {
+            releaseCleanup.complete(Unit)
+        }
+        refreshing.cancelAndJoin()
+
+        assertIs<VitrinaKitResult.Success<Unit>>(VitrinaKit.logout())
+    }
+
+    @Test
+    fun logoutReturnsBusyDuringFailingProfileRefreshThenClearsAfterFailure() = runTest {
+        val refreshRequested = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val http = object : VitrinaHttpClient {
+            override suspend fun send(request: VitrinaHttpRequest): VitrinaHttpResponse = when (request.path) {
+                "/api/v1/subscriber/identify" -> VitrinaHttpResponse(
+                    HttpStatusOk,
+                    identifyResponseJson("user-1"),
+                )
+                "/api/v1/subscriber/me" -> {
+                    refreshRequested.complete(Unit)
+                    releaseRefresh.await()
+                    VitrinaHttpResponse(HttpStatusServiceUnavailable, "{}")
+                }
+                else -> error("Unexpected request: ${request.path}")
+            }
+        }
+        VitrinaKit.activate(
+            VitrinaKitConfig.Builder("pk_test")
+                .withHttpClient(http)
+                .withHostedMigrationAdapter(FacadeHostedMigrationAdapter())
+                .build(),
+        )
+        assertIs<VitrinaKitResult.Success<VitrinaKitIdentifyResult>>(
+            VitrinaKit.identify(userId = "user-1"),
+        )
+
+        val refreshing = async { VitrinaKit.getProfile(forceRefresh = true) }
+        refreshRequested.await()
+
+        val busy = VitrinaKit.logout()
+        try {
+            assertIs<VitrinaKitError.Configuration>(assertIs<VitrinaKitResult.Failure>(busy).error)
+        } finally {
+            releaseRefresh.complete(Unit)
+        }
+        assertIs<VitrinaKitResult.Failure>(refreshing.await())
+
+        assertIs<VitrinaKitResult.Success<Unit>>(VitrinaKit.logout())
+    }
+
+    @OptIn(VitrinaKitPurchaseAdapterApi::class)
+    @Test
+    fun logoutReturnsBusyDuringProfileRefreshThenClearsAfterRetry() = runTest {
+        val refreshRequested = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val initialRestoreStarted = CompletableDeferred<Unit>()
+        val releaseInitialRestore = CompletableDeferred<Unit>()
+        val logoutRestoreStarted = CompletableDeferred<Unit>()
+        val releaseLogoutRestore = CompletableDeferred<Unit>()
+        val http = object : VitrinaHttpClient {
+            override suspend fun send(request: VitrinaHttpRequest): VitrinaHttpResponse = when (request.path) {
+                "/api/v1/subscriber/identify" -> VitrinaHttpResponse(
+                    HttpStatusOk,
+                    identifyResponseJson("user-1"),
+                )
+                "/api/v1/subscriber/me" -> {
+                    refreshRequested.complete(Unit)
+                    releaseRefresh.await()
+                    VitrinaHttpResponse(HttpStatusOk, subscriberJson)
+                }
+                else -> error("Unexpected request: ${request.path}")
+            }
+        }
+        val adapter = FacadePurchaseAdapter(
+            beforeAutomaticRestoreQuery = {
+                initialRestoreStarted.complete(Unit)
+                releaseInitialRestore.await()
+            },
+            beforeRestoreQuery = {
+                logoutRestoreStarted.complete(Unit)
+                releaseLogoutRestore.await()
+            },
+        )
+        VitrinaKit.activate(
+            VitrinaKitConfig.Builder("pk_test")
+                .withHttpClient(http)
+                .withPurchaseAdapter(adapter)
+                .build(),
+        )
+        initialRestoreStarted.await()
+        releaseInitialRestore.complete(Unit)
         val identification = VitrinaKit.identify(userId = "user-1")
         assertIs<VitrinaKitResult.Success<VitrinaKitIdentifyResult>>(
             identification,
@@ -961,15 +1093,23 @@ class VitrinaClientTest {
         val refreshing = async { VitrinaKit.getProfile(forceRefresh = true) }
         refreshRequested.await()
         val busy = VitrinaKit.logout()
-        assertIs<VitrinaKitError.Configuration>(assertIs<VitrinaKitResult.Failure>(busy).error)
-        releaseRefresh.complete(Unit)
+        try {
+            assertIs<VitrinaKitError.Configuration>(assertIs<VitrinaKitResult.Failure>(busy).error)
+        } finally {
+            releaseRefresh.complete(Unit)
+        }
 
         assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(refreshing.await())
         assertIs<VitrinaKitResult.Success<Unit>>(VitrinaKit.logout())
-        assertEquals(
-            VitrinaKitAccessResolution.CHECKING,
-            assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(VitrinaKit.getProfile()).value.accessResolution,
-        )
+        logoutRestoreStarted.await()
+        try {
+            assertEquals(
+                VitrinaKitAccessResolution.CHECKING,
+                assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(VitrinaKit.getProfile()).value.accessResolution,
+            )
+        } finally {
+            releaseLogoutRestore.complete(Unit)
+        }
     }
 
     @OptIn(VitrinaKitPurchaseAdapterApi::class)
@@ -2260,6 +2400,7 @@ private const val HttpStatusBadRequest = 400
 private const val HttpStatusUnauthorized = 401
 private const val HttpStatusNotFound = 404
 private const val HttpStatusConflict = 409
+private const val HttpStatusServiceUnavailable = 503
 
 private val json = Json { encodeDefaults = true }
 

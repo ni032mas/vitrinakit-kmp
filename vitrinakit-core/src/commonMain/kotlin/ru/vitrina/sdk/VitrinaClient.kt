@@ -23,6 +23,7 @@ import ru.vitrina.sdk.model.SubscriberState
 import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
 import ru.vitrina.sdk.model.VitrinaError
 import ru.vitrina.sdk.model.VitrinaResult
+import ru.vitrina.sdk.model.VitrinaKitIdentifyResult
 import ru.vitrina.sdk.purchase.PurchaseApi
 import ru.vitrina.sdk.purchase.PurchaseApiResult
 import ru.vitrina.sdk.purchase.PurchaseAttempt
@@ -42,31 +43,18 @@ import ru.vitrina.sdk.purchase.VitrinaKitRestoredPurchase
 /**
  * Configuration required to access the VitrinaKit public SDK API.
  *
- * @property appId Public app identifier from the VitrinaKit dashboard, when required by the API.
  * @property publishableKey SDK-safe publishable key. Never use a secret API key in a mobile app.
+ * @property installationId Identifier generated and persisted for this app installation.
  */
-data class VitrinaConfig(
-    /** Public app identifier from the VitrinaKit dashboard, when required by the API. */
-    val appId: String?,
+internal data class VitrinaConfig(
     /** SDK-safe publishable key. Never use a secret API key in a mobile app. */
     val publishableKey: String,
+    /** Identifier generated and persisted for this app installation. */
+    val installationId: String,
 ) {
     internal val baseUrl: String = VitrinaKitApiBaseUrl
     internal val environment = VitrinaKitApiEnvironment
 }
-
-/**
- * End-user context sent with SDK API requests.
- *
- * @property externalUserId Stable user identifier from the integrating product.
- * @property attributes Optional targeting attributes used by paywall placement logic.
- */
-data class UserContext(
-    /** Stable user identifier from the integrating product. */
-    val externalUserId: String,
-    /** Optional targeting attributes used by paywall placement logic. */
-    val attributes: Map<String, String> = emptyMap(),
-)
 
 /**
  * Request for creating a hosted checkout session.
@@ -102,10 +90,11 @@ data class CheckoutSessionRequest(
  * The client only uses publishable SDK keys and must never receive backend secret keys or provider credentials.
  */
 @OptIn(VitrinaKitPurchaseAdapterApi::class)
-class VitrinaClient(
+internal class VitrinaClient(
     private val config: VitrinaConfig,
     private val httpClient: VitrinaHttpClient,
 ) {
+    private var installationId = config.installationId
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = false
@@ -125,11 +114,35 @@ class VitrinaClient(
         }
     }
 
-    internal suspend fun exchangeSubscriberSession(trustedToken: String): VitrinaResult<SubscriberSession> = request(
+    internal fun replaceInstallationId(value: String) {
+        installationId = value
+    }
+
+    internal suspend fun identifySubscriber(userId: String): VitrinaResult<VitrinaKitIdentifyResult> = request(
         method = VitrinaHttpMethod.POST,
-        path = "/api/v1/subscriber-sessions",
-        body = json.encodeToString(SubscriberSessionExchangeRequest(token = trustedToken)),
-        decode = { payload -> json.decodeFromString<SubscriberSession>(payload) },
+        path = "/api/v1/subscriber/identify",
+        body = null,
+        additionalHeaders = subscriberHeaders(subscriberId = userId, sessionToken = null),
+        decode = { payload -> json.decodeFromString<IdentifySubscriberResponse>(payload).toDomain() },
+        errorMapper = ::identityError,
+    )
+
+    internal suspend fun requestEmailVerification(email: String): VitrinaResult<Unit> = request(
+        method = VitrinaHttpMethod.POST,
+        path = "/api/v1/email-verifications",
+        body = json.encodeToString(EmailVerificationRequest(email = email)),
+        decode = { Unit },
+        errorMapper = ::identityError,
+    )
+
+    internal suspend fun confirmEmailVerification(
+        email: String,
+        code: String,
+    ): VitrinaResult<EmailVerificationConfirmation> = request(
+        method = VitrinaHttpMethod.POST,
+        path = "/api/v1/email-verifications/confirm",
+        body = json.encodeToString(EmailVerificationConfirmRequest(email = email, code = code)),
+        decode = { payload -> json.decodeFromString<EmailVerificationConfirmation>(payload) },
         errorMapper = ::identityError,
     )
 
@@ -139,9 +152,12 @@ class VitrinaClient(
         subscriberSession: String?,
     ): VitrinaResult<Paywall> = request(
         method = VitrinaHttpMethod.GET,
-        path = identityPaywallPath(placementKey = placementKey, externalUserId = externalUserId),
+        path = identityPaywallPath(placementKey = placementKey),
         body = null,
-        additionalHeaders = subscriberSessionHeaders(sessionToken = subscriberSession),
+        additionalHeaders = subscriberHeaders(
+            subscriberId = externalUserId,
+            sessionToken = subscriberSession,
+        ),
         decode = { payload -> decodePaywall(payload = payload) },
         errorMapper = ::paywallError,
     )
@@ -151,30 +167,14 @@ class VitrinaClient(
         subscriberSession: String?,
     ): VitrinaResult<SubscriberState> = request(
         method = VitrinaHttpMethod.GET,
-        path = externalUserId?.let { "/api/v1/subscriber/${encodePathSegment(it)}" }
-            ?: "/api/v1/subscriber/me",
+        path = "/api/v1/subscriber/me",
         body = null,
-        additionalHeaders = subscriberSessionHeaders(sessionToken = subscriberSession),
+        additionalHeaders = subscriberHeaders(
+            subscriberId = externalUserId,
+            sessionToken = subscriberSession,
+        ),
         decode = { payload -> json.decodeFromString<SubscriberState>(payload) },
         errorMapper = ::subscriberError,
-    )
-
-    /**
-     * Fetches a paywall placement and its server-owned product and price options.
-     */
-    @Deprecated(
-        message = "Use the identity-bound VitrinaKit facade: identify(identity), then getPaywall(placementId).",
-        replaceWith = ReplaceWith("VitrinaKit.getPaywall(placementKey)"),
-    )
-    suspend fun fetchPaywall(
-        placementKey: String,
-        userContext: UserContext,
-    ): VitrinaResult<Paywall> = request(
-        method = VitrinaHttpMethod.GET,
-        path = paywallPath(placementKey = placementKey, userContext = userContext),
-        body = null,
-        decode = { payload -> decodePaywall(payload = payload) },
-        errorMapper = ::paywallError,
     )
 
     /**
@@ -194,24 +194,9 @@ class VitrinaClient(
         method = VitrinaHttpMethod.POST,
         path = "/api/v1/checkout/sessions",
         body = json.encodeToString(request),
-        additionalHeaders = subscriberSessionHeaders(sessionToken = subscriberSession),
+        additionalHeaders = subscriberHeaders(subscriberId = request.externalUserId, sessionToken = subscriberSession),
         decode = { payload -> json.decodeFromString<CheckoutSession>(payload) },
         errorMapper = ::checkoutError,
-    )
-
-    /**
-     * Refreshes the current subscription and entitlement state for an external user.
-     */
-    @Deprecated(
-        message = "Use the identity-bound VitrinaKit facade: identify(identity), then getProfile().",
-        replaceWith = ReplaceWith("VitrinaKit.getProfile()"),
-    )
-    suspend fun refreshSubscriber(externalUserId: String): VitrinaResult<SubscriberState> = request(
-        method = VitrinaHttpMethod.GET,
-        path = "/api/v1/subscriber/${encodePathSegment(externalUserId)}",
-        body = null,
-        decode = { payload -> json.decodeFromString<SubscriberState>(payload) },
-        errorMapper = ::subscriberError,
     )
 
     internal suspend fun startPurchase(
@@ -231,7 +216,7 @@ class VitrinaClient(
                     capability = capability,
                 ),
             ),
-            headers = subscriberSessionHeaders(scope.sessionToken) + (IdempotencyHeader to idempotencyKey),
+            headers = subscriberHeaders(scope.subscriberId, scope.sessionToken) + (IdempotencyHeader to idempotencyKey),
             expectedStatus = HttpStatusCreated,
             decode = { payload -> json.decodeFromString<PurchaseAttemptResponse>(payload).toDomain() },
         )
@@ -251,7 +236,7 @@ class VitrinaClient(
             method = VitrinaHttpMethod.POST,
             path = "/api/v1/purchase-attempts/${encodePathSegment(attemptReference)}/confirm",
             body = json.encodeToString(ConfirmPurchaseRequest(proof = proof.value)),
-            headers = subscriberSessionHeaders(scope.sessionToken) + (IdempotencyHeader to idempotencyKey),
+            headers = subscriberHeaders(scope.subscriberId, scope.sessionToken) + (IdempotencyHeader to idempotencyKey),
             expectedStatus = HttpStatusOk,
             decode = { payload -> json.decodeFromString<PurchaseConfirmationResponse>(payload).toDomain() },
         )
@@ -283,7 +268,7 @@ class VitrinaClient(
             method = VitrinaHttpMethod.GET,
             path = "/api/v1/purchase-attempts/${encodePathSegment(attemptReference)}",
             body = null,
-            headers = subscriberSessionHeaders(scope.sessionToken),
+            headers = subscriberHeaders(scope.subscriberId, scope.sessionToken),
             expectedStatus = HttpStatusOk,
             decode = { payload -> json.decodeFromString<PurchaseAttemptResponse>(payload).toDomain() },
         )
@@ -312,7 +297,7 @@ class VitrinaClient(
                 },
             ),
         ),
-        headers = subscriberSessionHeaders(scope.sessionToken),
+        headers = subscriberHeaders(scope.subscriberId, scope.sessionToken),
         expectedStatus = HttpStatusOk,
         decode = { payload -> json.decodeFromString<PurchaseRestoreResponseWire>(payload).toDomain() },
     )
@@ -323,7 +308,7 @@ class VitrinaClient(
         method = VitrinaHttpMethod.GET,
         path = "/api/v1/subscriber/me",
         body = null,
-        headers = subscriberSessionHeaders(scope.sessionToken),
+        headers = subscriberHeaders(scope.subscriberId, scope.sessionToken),
         expectedStatus = HttpStatusOk,
         decode = { payload -> json.decodeFromString<SubscriberState>(payload) },
     )
@@ -475,33 +460,26 @@ class VitrinaClient(
     private fun authHeaders(): Map<String, String> = buildMap {
         put("Authorization", "PublishableKey ${config.publishableKey}")
         put("Content-Type", "application/json")
-        config.appId?.takeIf { it.isNotBlank() }?.let { appId ->
-            put("X-Vitrina-App-Id", appId)
-        }
+        put(InstallationIdHeader, installationId)
         put("X-Vitrina-Environment", config.environment.name)
     }
 
-    private fun subscriberSessionHeaders(sessionToken: String?): Map<String, String> =
-        sessionToken?.takeIf { it.isNotBlank() }?.let { mapOf(SubscriberSessionHeader to it) }.orEmpty()
-
-    private fun identityPaywallPath(placementKey: String, externalUserId: String?): String {
-        val path = "/api/v1/paywall/${encodePathSegment(normalizePlacementKey(placementKey))}"
-        return externalUserId?.let { "$path?external_user_id=${encodeQueryValue(it)}" } ?: path
+    private fun subscriberHeaders(subscriberId: String?, sessionToken: String?): Map<String, String> = buildMap {
+        val bearer = sessionToken?.takeIf { it.isNotBlank() }
+        if (bearer != null) {
+            put("Authorization", "Bearer $bearer")
+        } else {
+            subscriberId?.takeIf { it.isNotBlank() }?.let { value ->
+                put(SubscriberIdHeader, value)
+            }
+        }
     }
+
+    private fun identityPaywallPath(placementKey: String): String =
+        "/api/v1/paywall/${encodePathSegment(normalizePlacementKey(placementKey))}"
 
     private fun decodePaywall(payload: String): Paywall {
         return json.decodeFromString<Paywall>(payload)
-    }
-
-    private fun paywallPath(placementKey: String, userContext: UserContext): String {
-        val normalizedPlacement = normalizePlacementKey(placementKey)
-        val query = buildList {
-            add("external_user_id=${encodeQueryValue(userContext.externalUserId)}")
-            userContext.attributes.forEach { (key, value) ->
-                add("${encodeQueryValue(key)}=${encodeQueryValue(value)}")
-            }
-        }.joinToString(separator = "&")
-        return "/api/v1/paywall/${encodePathSegment(normalizedPlacement)}?$query"
     }
 
     private fun paywallError(statusCode: Int, body: String): VitrinaError = when (statusCode) {
@@ -700,7 +678,8 @@ private const val DotAscii = 46
 private const val ByteMask = 0xFF
 private const val HexRadix = 16
 private const val HexWidth = 2
-private const val SubscriberSessionHeader = "Vitrina-Subscriber-Session"
+private const val InstallationIdHeader = "X-Vitrina-Installation-Id"
+private const val SubscriberIdHeader = "X-Vitrina-Subscriber-Id"
 private const val IdempotencyHeader = "Idempotency-Key"
 private const val RetryableField = "retryable"
 private const val TrueValue = "true"
@@ -731,24 +710,37 @@ private fun VitrinaKitPurchaseAttemptStatus.isTerminalPurchaseStatus(): Boolean 
 }
 
 @Serializable
-internal data class SubscriberSessionExchangeRequest(val token: String) {
-    override fun toString(): String = "SubscriberSessionExchangeRequest(token=<redacted>)"
+private data class IdentifySubscriberResponse(
+    val merged: Boolean,
+    val subscriber: SubscriberState,
+)
+
+private fun IdentifySubscriberResponse.toDomain(): VitrinaKitIdentifyResult = VitrinaKitIdentifyResult(
+    merged = merged,
+    profile = subscriber,
+)
+
+@Serializable
+private data class EmailVerificationRequest(val email: String)
+
+@Serializable
+private data class EmailVerificationConfirmRequest(
+    val email: String,
+    val code: String,
+) {
+    override fun toString(): String = "EmailVerificationConfirmRequest(email=<redacted>, code=<redacted>)"
 }
 
 @Serializable
-internal data class SubscriberSession(
+internal data class EmailVerificationConfirmation(
     @SerialName("session_token")
     val sessionToken: String,
-    @SerialName("subscriber_id")
-    val subscriberId: String,
-    @SerialName("external_user_id")
-    val externalUserId: String,
     @SerialName("expires_at")
     val expiresAt: String,
+    val profile: SubscriberState,
 ) {
     override fun toString(): String =
-        "SubscriberSession(sessionToken=<redacted>, subscriberId=$subscriberId, " +
-            "externalUserId=$externalUserId, expiresAt=$expiresAt)"
+        "EmailVerificationConfirmation(sessionToken=<redacted>, expiresAt=$expiresAt, profile=<redacted>)"
 }
 
 @Serializable

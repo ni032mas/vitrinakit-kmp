@@ -2,6 +2,7 @@ package ru.vitrina.sdk.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * VitrinaKit API environment used by the SDK.
@@ -321,6 +322,34 @@ data class SubscriberState(
     val hasAccess: Boolean,
     /** Entitlements known for the subscriber. */
     val entitlements: List<SubscriberEntitlementState>,
+    /** Whether startup store restoration is still resolving the authoritative access state. */
+    @Transient
+    val accessResolution: VitrinaKitAccessResolution = VitrinaKitAccessResolution.CURRENT,
+)
+
+/** Startup resolution state for the access information exposed by [VitrinaKitProfile]. */
+enum class VitrinaKitAccessResolution {
+    /** The SDK is querying the store and access may still change. */
+    CHECKING,
+
+    /** The profile reflects the latest server-confirmed store restoration or explicit refresh. */
+    CURRENT,
+
+    /** Automatic restoration could not complete, so the last known access state may be incomplete. */
+    UNAVAILABLE,
+}
+
+/**
+ * Result of associating the current installation with an application user identifier.
+ *
+ * @property merged Whether installation-scoped purchase ownership was merged into the subscriber.
+ * @property profile Authoritative subscriber profile after identification.
+ */
+data class VitrinaKitIdentifyResult(
+    /** Whether installation-scoped purchase ownership was merged into the subscriber. */
+    val merged: Boolean,
+    /** Authoritative subscriber profile after identification. */
+    val profile: VitrinaKitProfile,
 )
 
 /**

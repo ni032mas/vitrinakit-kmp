@@ -1,5 +1,25 @@
 # VitrinaKit KMP SDK Changelog
 
+## Unreleased
+
+### Added
+
+- Persistent installation identities on JVM and iOS, with automatic
+  non-blocking store restoration and explicit access-resolution state.
+- Subscriber association through `identify(userId)`, opaque backend sessions,
+  and privacy-safe email verification recovery.
+
+### Changed
+
+- Publishable-key, subscriber-ID, and bearer-session requests now follow three
+  explicit authorization tiers while always sending the installation ID.
+- `logout()` rotates the installation ID so a shared device cannot reconnect a
+  later user to the previous subscriber.
+
+### Removed
+
+- Signed client subscriber tokens and the obsolete separate application ID.
+
 ## 0.1.0-rc.7
 
 Provider-neutral purchase adapter release candidate.

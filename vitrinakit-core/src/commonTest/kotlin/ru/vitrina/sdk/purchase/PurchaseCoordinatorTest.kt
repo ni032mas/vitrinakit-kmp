@@ -742,7 +742,6 @@ private fun trustedScope(): SubscriberScope = SubscriberScope(
 
 private fun cacheKey(): SubscriberCacheKey = SubscriberCacheKey(
     environment = "production",
-    appId = "app-1",
     subscriberReference = "subscriber-1",
 )
 

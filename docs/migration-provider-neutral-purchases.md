@@ -22,13 +22,13 @@ be repeated on every purchase call.
 1. Install core plus exactly one adapter.
 2. Move provider construction and provider-only values to the application
    composition root.
-3. Fetch a short-lived trusted subscriber token from the application backend.
-4. Call `identify` once for the active application account.
+3. Call `identify(userId)` once for the active application account, or bind an
+   opaque backend session with `setSubscriberSession(session)`.
 5. Call `purchase(product)` and `restorePurchases()` from feature code.
 
 ```kotlin
 VitrinaKit.activate(providerSpecificConfig)
-VitrinaKit.identify(VitrinaKitIdentity.TrustedToken(trustedSubscriberToken))
+VitrinaKit.identify(currentUser.id)
 
 val paywall = when (val result = VitrinaKit.getPaywall("main")) {
     is VitrinaKitResult.Success -> result.value
@@ -60,7 +60,8 @@ feature code.
   failures are typed and privacy-safe.
 - `onForeground()` performs query-only native recovery and never presents a new
   provider flow.
-- `logout()` clears subscriber caches, resumable state, and adapter resources.
+- `logout()` clears subscriber caches and resumable state, closes adapter
+  resources, and rotates the installation ID before returning to installation scope.
 
 ## Deprecation window
 

@@ -14,10 +14,10 @@ import ru.vitrina.sdk.purchase.VitrinaKitPurchaseResumeData
 
 class SubscriberCacheTest {
     @Test
-    fun profileAndPendingStateAreIsolatedByEnvironmentAppAndSubscriber() {
+    fun profileAndPendingStateAreIsolatedByEnvironmentAndSubscriber() {
         val cache = SubscriberCache()
-        val first = key(environment = "production", app = "app-1", subscriber = "subscriber-1")
-        val second = key(environment = "production", app = "app-1", subscriber = "subscriber-2")
+        val first = key(environment = "production", subscriber = "subscriber-1")
+        val second = key(environment = "production", subscriber = "subscriber-2")
         val profile = SubscriberState(externalUserId = "user-1", hasAccess = true, entitlements = emptyList())
         val pending = pending()
 
@@ -34,13 +34,11 @@ class SubscriberCacheTest {
     fun trustedSessionsForTheSameSubscriberUseDistinctCacheKeysWithoutLoggingTokens() {
         val first = key(
             environment = "production",
-            app = "app-1",
             subscriber = "subscriber-1",
             session = "session-secret-1",
         )
         val second = key(
             environment = "production",
-            app = "app-1",
             subscriber = "subscriber-1",
             session = "session-secret-2",
         )
@@ -52,7 +50,7 @@ class SubscriberCacheTest {
     @Test
     fun replacingProfileIsAtomicAndPendingNeverElevatesAccess() {
         val cache = SubscriberCache()
-        val key = key(environment = "sandbox", app = "app-1", subscriber = "subscriber-1")
+        val key = key(environment = "sandbox", subscriber = "subscriber-1")
         val inactive = SubscriberState(externalUserId = "user-1", hasAccess = false, entitlements = emptyList())
         val active = SubscriberState(externalUserId = "user-1", hasAccess = true, entitlements = emptyList())
 
@@ -67,7 +65,7 @@ class SubscriberCacheTest {
     @Test
     fun identityClearRemovesProfileAndResumeData() {
         val cache = SubscriberCache()
-        val key = key(environment = "production", app = "app-1", subscriber = "subscriber-1")
+        val key = key(environment = "production", subscriber = "subscriber-1")
         cache.replaceProfile(key, SubscriberState("user-1", true, emptyList()))
         cache.storeResume(key, pending())
 
@@ -80,7 +78,7 @@ class SubscriberCacheTest {
     @Test
     fun staleGenerationCannotRepopulateCacheAfterIdentityClear() {
         val cache = SubscriberCache()
-        val key = key(environment = "production", app = "app-1", subscriber = "subscriber-1")
+        val key = key(environment = "production", subscriber = "subscriber-1")
         val staleGeneration = cache.generation
 
         cache.clearAll()
@@ -96,12 +94,10 @@ class SubscriberCacheTest {
 
 private fun key(
     environment: String,
-    app: String,
     subscriber: String,
     session: String? = null,
 ): SubscriberCacheKey = SubscriberCacheKey(
     environment = environment,
-    appId = app,
     subscriberReference = subscriber,
     subscriberSession = session,
 )

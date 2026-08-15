@@ -14,7 +14,6 @@ import ru.vitrina.sdk.VitrinaKitConfig
 import ru.vitrina.sdk.http.VitrinaHttpClient
 import ru.vitrina.sdk.http.VitrinaHttpRequest
 import ru.vitrina.sdk.http.VitrinaHttpResponse
-import ru.vitrina.sdk.identity.VitrinaKitIdentity
 import ru.vitrina.sdk.model.VitrinaKitResult
 import ru.vitrina.sdk.model.CheckoutSession
 import ru.vitrina.sdk.model.Entitlement
@@ -73,7 +72,7 @@ class HostedCheckoutAdapterTest {
         )
         assertIs<VitrinaKitResult.Success<Unit>>(activation)
         assertIs<VitrinaKitResult.Success<*>>(
-            VitrinaKit.identify(VitrinaKitIdentity.TrustedToken("trusted-token")),
+            VitrinaKit.setSubscriberSession("opaque-session"),
         )
         val paywall = assertIs<VitrinaKitResult.Success<*>>(VitrinaKit.getPaywall("main"))
         val product = (paywall.value as ru.vitrina.sdk.model.VitrinaKitPaywall).products.single()
@@ -85,7 +84,8 @@ class HostedCheckoutAdapterTest {
         assertTrue(success.profile.hasAccess)
         assertEquals(listOf("https://pay.example/confirm"), launchedUrls)
         val checkout = http.requests.single { it.path == "/api/v1/checkout/sessions" }
-        assertEquals("opaque-session", checkout.headers["Vitrina-Subscriber-Session"])
+        assertEquals("Bearer opaque-session", checkout.headers["Authorization"])
+        assertFalse(checkout.headers.containsKey("X-Vitrina-Subscriber-Id"))
         assertTrue(checkout.body.orEmpty().contains("buyer@example.com"))
         assertTrue(checkout.body.orEmpty().contains("vitrinakit-test://checkout-return"))
         assertFalse(checkout.body.orEmpty().contains("capability"))
@@ -504,7 +504,7 @@ class HostedCheckoutAdapterTest {
             ),
         )
         assertIs<VitrinaKitResult.Success<*>>(
-            VitrinaKit.identify(VitrinaKitIdentity.TrustedToken("trusted-token")),
+            VitrinaKit.setSubscriberSession("opaque-session"),
         )
         val paywall = assertIs<VitrinaKitResult.Success<*>>(VitrinaKit.getPaywall("main"))
         val product = (paywall.value as ru.vitrina.sdk.model.VitrinaKitPaywall).products.single()
@@ -543,7 +543,7 @@ class HostedCheckoutAdapterTest {
             ),
         )
         assertIs<VitrinaKitResult.Success<*>>(
-            VitrinaKit.identify(VitrinaKitIdentity.TrustedToken("trusted-token")),
+            VitrinaKit.setSubscriberSession("opaque-session"),
         )
         val paywall = assertIs<VitrinaKitResult.Success<*>>(VitrinaKit.getPaywall("main"))
         val product = (paywall.value as ru.vitrina.sdk.model.VitrinaKitPaywall).products.single()
@@ -586,7 +586,7 @@ class HostedCheckoutAdapterTest {
             ),
         )
         assertIs<VitrinaKitResult.Success<*>>(
-            VitrinaKit.identify(VitrinaKitIdentity.TrustedToken("trusted-token")),
+            VitrinaKit.setSubscriberSession("opaque-session"),
         )
 
         val result = VitrinaKit.restorePurchases()
@@ -655,7 +655,7 @@ class HostedCheckoutAdapterTest {
             ),
         )
         assertIs<VitrinaKitResult.Success<*>>(
-            VitrinaKit.identify(VitrinaKitIdentity.TrustedToken("trusted-token")),
+            VitrinaKit.setSubscriberSession("opaque-session"),
         )
         val paywall = assertIs<VitrinaKitResult.Success<*>>(VitrinaKit.getPaywall("main"))
         val product = (paywall.value as ru.vitrina.sdk.model.VitrinaKitPaywall).products.single()
@@ -803,7 +803,6 @@ private class HostedFacadeHttpClient(
     override suspend fun send(request: VitrinaHttpRequest): VitrinaHttpResponse {
         requests += request
         return when (request.path) {
-            "/api/v1/subscriber-sessions" -> VitrinaHttpResponse(201, SubscriberSessionJson)
             "/api/v1/subscriber/me" -> {
                 profileRequests += 1
                 VitrinaHttpResponse(200, if (profileRequests == 1) InactiveProfileJson else authoritativeProfileJson)
@@ -815,8 +814,6 @@ private class HostedFacadeHttpClient(
     }
 }
 
-private const val SubscriberSessionJson =
-    """{"session_token":"opaque-session","subscriber_id":"subscriber-1","external_user_id":"user-1","expires_at":"2026-08-06T12:00:00Z"}"""
 private const val InactiveProfileJson =
     """{"external_user_id":"user-1","has_access":false,"entitlements":[]}"""
 private const val ActiveProfileJson =

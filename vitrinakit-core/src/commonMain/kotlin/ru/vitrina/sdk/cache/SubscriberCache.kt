@@ -8,12 +8,11 @@ import ru.vitrina.sdk.purchase.PendingPurchase
 
 internal data class SubscriberCacheKey(
     val environment: String,
-    val appId: String?,
     val subscriberReference: String,
     val subscriberSession: String? = null,
 ) {
     override fun toString(): String =
-        "SubscriberCacheKey(environment=$environment, appId=$appId, " +
+        "SubscriberCacheKey(environment=$environment, " +
             "subscriberReference=$subscriberReference, subscriberSession=<redacted>)"
 }
 

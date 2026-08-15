@@ -1,81 +1,57 @@
 # Identity and account lifecycle
 
-VitrinaKit binds paywalls, purchases, restore, profiles, caches, and resumable
-state to one identified application account. Identity is explicit so one user
-cannot observe or resume another user's subscription flow on a shared device.
+VitrinaKit always has an installation identity. Activation loads or creates a
+persistent installation ID, returns immediately, and starts store restoration
+in the background. The first profile can therefore report
+`accessResolution == CHECKING`; applications may wait for a resolved profile
+when an access-sensitive screen cannot show the temporary signed-out state.
 
-## Recommended trusted-token flow
+## Application users
 
-1. Authenticate the user with the application backend.
-2. Send the existing application session to that backend over the normal secure
-   channel.
-3. The application backend obtains a short-lived trusted subscriber token and
-   returns it to the authenticated app session.
-4. Pass the token directly to `VitrinaKit.identify`.
-5. Discard the token after the call. Do not log, persist, analyze, or attach it
-   to crash reports.
+Associate the installation with an application's stable user ID after sign-in:
 
 ```kotlin
-val token = customerBackend.fetchTrustedSubscriberToken()
-
-when (val result = VitrinaKit.identify(VitrinaKitIdentity.TrustedToken(token))) {
-    is VitrinaKitResult.Success -> renderProfile(result.value)
+when (val result = VitrinaKit.identify(currentUser.id)) {
+    is VitrinaKitResult.Success -> {
+        val mergeOccurred = result.value.merged
+        val profile = result.value.profile
+        reloadPaywall()
+    }
     is VitrinaKitResult.Failure -> showSignInRetry()
 }
 ```
 
-The SDK exchanges the short-lived token for an opaque subscriber session and
-does not retain the original token. Account-required native purchase and restore
-calls require this trusted identity.
+Identification can merge subscriber records and change the subscriber ID used
+for paywall assignment. Always reload an already displayed paywall after a
+successful call.
 
-`VitrinaKitIdentity.ExternalUserId` is available only for applications whose
-VitrinaKit policy explicitly permits client-supplied stable IDs. Do not use it
-as a fallback when trusted identity is required.
+An application backend may instead mint an opaque subscriber session. Bind it
+with `VitrinaKit.setSubscriberSession(session)`. The SDK keeps the session in
+memory and uses it as the sole authorization authority for subscriber requests.
 
-## Switching users
+## Email recovery
 
-Call `identify` again after the application account changes. Before the new
-identity becomes visible, the SDK closes purchase resources, clears prior
-subscriber caches and open attempts, and binds subsequent operations to the new
-subscriber session.
+`requestEmailVerification(email)` requests a one-time code and returns the same
+public result whether or not the address owns access. Confirm the code with
+`confirmEmailVerification(email, code)`; success binds the returned subscriber
+session and profile.
 
-Call `logout()` when the application account signs out:
+## Switching users and logout
 
-```kotlin
-when (VitrinaKit.logout()) {
-    is VitrinaKitResult.Success -> showSignedOutUi()
-    is VitrinaKitResult.Failure -> showSdkLifecycleError()
-}
-```
+Call `identify` or `setSubscriberSession` again when the application account
+changes. The SDK clears the previous subscriber cache and pending purchase state
+before binding the replacement.
 
-Logout clears subscriber-scoped cache and resumable state and closes adapter
-resources. Provider accounts are not linked, aliased, or transferred locally.
+`logout()` clears subscriber state, closes purchase resources, and generates a
+new installation ID. The prior installation is never reused, so a later user on
+the same device cannot recover the previous user's access through that link.
+This deliberately resets installation-scoped paywall experiments and analytics.
 
-## Ownership and privacy
-
-- Native restore queries purchases visible to the current store session, but
-  the server decides whether each purchase belongs to the identified account.
-- A purchase already bound to a different account returns
-  `PURCHASE_OWNED_BY_DIFFERENT_USER` without revealing that account.
-- Existing access for the identified account can remain active even if the
-  current device store session has no matching purchase.
-- Hosted restore refreshes the identified server profile because a browser
-  checkout is not owned by a device store account.
+Store purchases remain recoverable after a reinstall or installation-ID change;
+the server remains authoritative for ownership and access.
 
 ## Safe diagnostics
 
-Identity and purchase failures expose stable categories. Log only the category,
-`retryable`, and `supportReference` when present:
-
-```kotlin
-fun report(error: VitrinaKitPurchaseError) {
-    safeLogger.record(
-        code = error.code.name,
-        retryable = error.retryable,
-        supportReference = error.supportReference,
-    )
-}
-```
-
-Never log identity values, subscriber sessions, provider evidence, receipt
-addresses, return URLs, or complete SDK request/response objects.
+Log only stable error categories, retryability, and opaque support references.
+Never log user IDs, subscriber sessions, verification codes, provider evidence,
+receipt addresses, return URLs, or complete SDK requests and responses.

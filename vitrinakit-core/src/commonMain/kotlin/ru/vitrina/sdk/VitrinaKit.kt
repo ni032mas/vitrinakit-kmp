@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -1109,15 +1110,15 @@ private data class VitrinaKitRuntime(
     val backgroundScope: CoroutineScope,
     var automaticRestoreJob: Job? = null,
 ) {
-    fun closePurchaseResources() {
-        automaticRestoreJob?.cancel()
+    suspend fun closePurchaseResources() {
+        automaticRestoreJob?.cancelAndJoin()
         automaticRestoreJob = null
         client.clearPurchaseAttempts()
         coordinator?.close()
         hostedMigrationAdapter?.close()
     }
 
-    fun closeRuntime() {
+    suspend fun closeRuntime() {
         closePurchaseResources()
         backgroundScope.cancel()
     }

@@ -845,23 +845,35 @@ class VitrinaClientTest {
     fun externalIdentityReplacementAndLogoutReplaceCachedProfileWithFreshInstallationState() = runTest {
         val firstProfile = subscriberJson.replace("user-1", "user-first")
         val secondProfile = subscriberJson.replace("user-1", "user-second")
+        val installationStorage = MemoryInstallationIdStorage("installation-before-logout")
+        val logoutRestoreStarted = CompletableDeferred<Unit>()
+        val releaseLogoutRestore = CompletableDeferred<Unit>()
         val http = QueueHttpClient(
             VitrinaHttpResponse(HttpStatusOk, firstProfile),
             VitrinaHttpResponse(HttpStatusOk, secondProfile),
         )
-        val adapter = FacadePurchaseAdapter()
+        val adapter = FacadePurchaseAdapter(
+            beforeRestoreQuery = {
+                logoutRestoreStarted.complete(Unit)
+                releaseLogoutRestore.await()
+            },
+        )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(installationStorage)
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
         )
+        awaitResolvedProfile()
 
         VitrinaKit.identify(userId = "user-first")
         assertEquals("user-first", assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(VitrinaKit.getProfile()).value.externalUserId)
         VitrinaKit.identify(userId = "user-second")
         assertEquals("user-second", assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(VitrinaKit.getProfile()).value.externalUserId)
+        val previousInstallationId = installationStorage.read()
         VitrinaKit.logout()
+        logoutRestoreStarted.await()
 
         val loggedOutProfile = assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(
             VitrinaKit.getProfile(),
@@ -869,7 +881,10 @@ class VitrinaClientTest {
         assertEquals("", loggedOutProfile.externalUserId)
         assertFalse(loggedOutProfile.hasAccess)
         assertEquals(VitrinaKitAccessResolution.CHECKING, loggedOutProfile.accessResolution)
+        assertNotEquals(previousInstallationId, installationStorage.read())
         assertEquals(3, adapter.closeCount)
+        releaseLogoutRestore.complete(Unit)
+        awaitResolvedProfile()
     }
 
     @OptIn(VitrinaKitPurchaseAdapterApi::class)
@@ -2003,6 +2018,21 @@ private fun newClient(http: VitrinaHttpClient = FakeHttpClient()): VitrinaClient
     ),
     httpClient = http,
 )
+
+private suspend fun awaitResolvedProfile(): VitrinaKitProfile = withContext(Dispatchers.Default) {
+    requireNotNull(
+        withTimeoutOrNull(5_000) {
+            var profile: VitrinaKitProfile
+            do {
+                profile = assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(VitrinaKit.getProfile()).value
+                if (profile.accessResolution == VitrinaKitAccessResolution.CHECKING) {
+                    delay(10)
+                }
+            } while (profile.accessResolution == VitrinaKitAccessResolution.CHECKING)
+            profile
+        },
+    )
+}
 
 private class FakeHttpClient(
     private val response: VitrinaHttpResponse = VitrinaHttpResponse(

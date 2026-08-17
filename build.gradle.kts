@@ -9,6 +9,8 @@ import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.TaskAction
+import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 
 plugins {
     kotlin("multiplatform") version "2.3.20" apply false
@@ -19,11 +21,17 @@ plugins {
 }
 
 group = "ru.vitrina"
-version = "0.1.0-rc.8"
+version = "0.1.0-rc.9"
 extra["googlePlayBillingVersion"] = "9.1.0"
 extra["kotlinxCoroutinesVersion"] = "1.10.2"
 extra["ruStoreBomVersion"] = "2026.07.01"
 extra["ruStorePayVersion"] = "11.0.0"
+
+// Class file major version 61 == Java 17 (major = Java SE version + 44 for SE 9+).
+// https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.1
+private val vitrinaKitJvmTargetVersion = 17
+private val vitrinaKitJvmTargetClassFileMajorVersion = 61
+extra["vitrinaKitJvmTargetVersion"] = vitrinaKitJvmTargetVersion
 
 subprojects {
     group = rootProject.group
@@ -53,6 +61,16 @@ private val expectedArtifactBaseIds = coreArtifactIds + setOf(
     "vitrinakit-rustore",
     "vitrinakit-rustore-android",
 )
+
+// The base artifact IDs above that actually carry JVM bytecode (.jar / .aar classes.jar).
+// The root "kotlinMultiplatform" and Apple publications carry no JVM bytecode and are excluded.
+private val jvmBytecodeArtifactBaseIds = setOf(
+    "vitrinakit-kmp-sdk-jvm",
+    "vitrinakit-googleplay-android",
+    "vitrinakit-hosted-android",
+    "vitrinakit-hosted-jvm",
+    "vitrinakit-rustore-android",
+)
 private val vitrinaKitPublicationName = providers.gradleProperty("vitrinaKitPublication")
     .orElse(providers.environmentVariable("VITRINAKIT_PUBLICATION"))
     .orElse("production")
@@ -73,6 +91,9 @@ private val requiredCoreArtifactIds = coreArtifactIds.map { artifactId ->
     "$artifactId$vitrinaKitPublicationSuffix"
 }.toSet()
 private val requiredProviderArtifactIds = requiredArtifactIds - requiredCoreArtifactIds
+private val requiredJvmBytecodeArtifactIds = jvmBytecodeArtifactBaseIds.map { artifactId ->
+    "$artifactId$vitrinaKitPublicationSuffix"
+}.toSet()
 
 abstract class VerifyReleaseArtifactsTask : DefaultTask() {
     @get:Input
@@ -92,6 +113,12 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
 
     @get:Input
     abstract val coreAppleArtifactIds: ListProperty<String>
+
+    @get:Input
+    abstract val jvmBytecodeArtifactIds: ListProperty<String>
+
+    @get:Input
+    abstract val expectedClassFileMajorVersion: Property<Int>
 
     @get:Input
     abstract val googlePlayAndroidArtifactId: Property<String>
@@ -135,6 +162,61 @@ abstract class VerifyReleaseArtifactsTask : DefaultTask() {
                             artifactDirectory,
                     )
                 }
+            }
+        }
+
+        val expectedMajorVersion = expectedClassFileMajorVersion.get()
+        jvmBytecodeArtifactIds.get().forEach { artifactId ->
+            val artifactDirectory = repository.resolve("ru/vitrina/$artifactId")
+            val classBearingFiles = artifactDirectory.walkTopDown()
+                .filter { file -> file.extension == "jar" || file.extension == "aar" }
+                .filterNot { file -> file.name.endsWith("-sources.jar") }
+                .toList()
+            if (classBearingFiles.isEmpty()) {
+                throw GradleException(
+                    "No published JAR or AAR carrying JVM bytecode found for $artifactId: $artifactDirectory",
+                )
+            }
+            var checkedClassFileCount = 0
+            classBearingFiles.forEach { archiveFile ->
+                val classesJarBytes = if (archiveFile.extension == "aar") {
+                    ZipFile(archiveFile).use { aar ->
+                        val classesEntry = aar.getEntry("classes.jar")
+                            ?: throw GradleException("AAR is missing classes.jar: $archiveFile")
+                        aar.getInputStream(classesEntry).use { input -> input.readBytes() }
+                    }
+                } else {
+                    archiveFile.readBytes()
+                }
+                ZipInputStream(classesJarBytes.inputStream()).use { classesJar ->
+                    var entry = classesJar.nextEntry
+                    while (entry != null) {
+                        if (entry.name.endsWith(".class")) {
+                            val header = classesJar.readNBytes(8)
+                            if (header.size != 8) {
+                                throw GradleException(
+                                    "Truncated class file header for ${entry.name} in $archiveFile",
+                                )
+                            }
+                            val majorVersion =
+                                ((header[6].toInt() and 0xFF) shl 8) or (header[7].toInt() and 0xFF)
+                            if (majorVersion != expectedMajorVersion) {
+                                throw GradleException(
+                                    "Class file ${entry.name} in $archiveFile was compiled to bytecode " +
+                                        "major version $majorVersion, but the declared JVM target for " +
+                                        "$artifactId requires major version $expectedMajorVersion. The " +
+                                        "published bytecode level must match the declared JVM target " +
+                                        "regardless of the JDK that ran the build.",
+                                )
+                            }
+                            checkedClassFileCount++
+                        }
+                        entry = classesJar.nextEntry
+                    }
+                }
+            }
+            if (checkedClassFileCount == 0) {
+                throw GradleException("No .class files found to verify bytecode level for $artifactId")
             }
         }
 
@@ -587,6 +669,8 @@ tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
             "vitrinakit-kmp-sdk-iossimulatorarm64$vitrinaKitPublicationSuffix",
         ),
     )
+    jvmBytecodeArtifactIds.set(requiredJvmBytecodeArtifactIds.sorted())
+    expectedClassFileMajorVersion.set(vitrinaKitJvmTargetClassFileMajorVersion)
     googlePlayAndroidArtifactId.set("vitrinakit-googleplay-android$vitrinaKitPublicationSuffix")
     googlePlayBillingVersion.set(rootProject.extra["googlePlayBillingVersion"] as String)
     kotlinxCoroutinesVersion.set(rootProject.extra["kotlinxCoroutinesVersion"] as String)

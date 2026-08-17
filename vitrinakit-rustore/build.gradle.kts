@@ -11,6 +11,8 @@ val kotlinxCoroutinesVersion = rootProject.extra["kotlinxCoroutinesVersion"] as 
 val ruStoreBomVersion = rootProject.extra["ruStoreBomVersion"] as String
 
 kotlin {
+    jvmToolchain(rootProject.extra["vitrinaKitJvmTargetVersion"] as Int)
+
     androidLibrary {
         namespace = "ru.vitrina.sdk.rustore"
         compileSdk = 36

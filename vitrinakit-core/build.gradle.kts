@@ -12,6 +12,8 @@ extra["vitrinaKitGeneratesPublicationConfig"] = "true"
 apply(from = rootProject.file("gradle/publishing-conventions.gradle.kts"))
 
 kotlin {
+    jvmToolchain(rootProject.extra["vitrinaKitJvmTargetVersion"] as Int)
+
     val vitrinaKitXCFramework = XCFramework("VitrinaKit")
 
     jvm()

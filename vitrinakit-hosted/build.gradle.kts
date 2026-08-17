@@ -10,6 +10,8 @@ plugins {
 apply(from = rootProject.file("gradle/publishing-conventions.gradle.kts"))
 
 kotlin {
+    jvmToolchain(rootProject.extra["vitrinaKitJvmTargetVersion"] as Int)
+
     val vitrinaKitHostedXCFramework = XCFramework("VitrinaKitHosted")
 
     jvm()

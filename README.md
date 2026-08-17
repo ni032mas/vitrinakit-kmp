@@ -9,6 +9,15 @@ Current release candidate: `0.1.0-rc.7`. The source and local release artifacts
 are ready for validation; publishing remains a separate, explicitly approved
 release operation.
 
+## Requirements
+
+Published artifacts target JVM bytecode level 17 (class file major version 61).
+Build and run consuming applications on JDK 17 or newer. The target is pinned
+explicitly in the build (`kotlin { jvmToolchain(17) }` per module) and checked
+against the compiled class files of every published JVM and Android artifact
+in `make verify`, so it cannot silently change with the JDK that runs a
+release.
+
 ## Install
 
 Add the VitrinaKit GitHub Packages repository. Keep package credentials outside

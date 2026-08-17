@@ -11,6 +11,8 @@ val googlePlayBillingVersion = rootProject.extra["googlePlayBillingVersion"] as 
 val kotlinxCoroutinesVersion = rootProject.extra["kotlinxCoroutinesVersion"] as String
 
 kotlin {
+    jvmToolchain(rootProject.extra["vitrinaKitJvmTargetVersion"] as Int)
+
     androidLibrary {
         namespace = "ru.vitrina.sdk.googleplay"
         compileSdk = 36

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.1.0-rc.9
+
+JVM target pinning release candidate.
+
+### Fixed
+
+- Every published JVM and Android artifact now declares an explicit JVM
+  target (17) instead of inheriting whatever JDK happened to build it. Prior
+  RCs silently shipped Java 21 bytecode because CI built on JDK 21, which
+  broke consumers on JDK 17 with `UnsupportedClassVersionError`. JDK 17 is now
+  a stated, verified requirement instead of an accident of the release
+  machine's JDK version.
+
+### Added
+
+- `make verify` now reads the compiled class files of every published JVM and
+  Android artifact and fails if their bytecode level does not match the
+  declared JVM target, so this cannot regress by changing the CI JDK again.
+
 ## 0.1.0-rc.8
 
 Subscriber identity tiers and recovery release candidate.

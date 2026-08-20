@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.1.0-rc.11
+
+Paywall response shape release candidate. Every paywall load failed to parse
+in production despite a successful HTTP call.
+
+### Fixed
+
+- `Paywall` no longer declares `paywall_id`, `config`, or `fallback_config`.
+  The API sends only `placement_key` and `products`; the three removed
+  properties were non-nullable with no defaults, so `kotlinx.serialization`
+  threw on every real response and `getPaywall()` returned
+  `VitrinaKitResult.Failure` after a `200 OK`. The model now matches the
+  documented integration contract, which states the response carries no
+  paywall configuration, experiment, variant, or fallback fields.
+
 ## 0.1.0-rc.10
 
 Android target release candidate. An Android integrator on an earlier RC gets a

@@ -868,6 +868,6 @@ private const val InactiveProfileJson =
 private const val ActiveProfileJson =
     """{"external_user_id":"user-1","has_access":true,"entitlements":[{"key":"premium","status":"active","has_access":true,"product_key":"premium_monthly","source":"yookassa","auto_renew_enabled":true}]}"""
 private const val PaywallJson =
-    """{"placement_key":"main","paywall_id":"paywall-1","config":{"template":"default","metadata":{}},"fallback_config":{"template":"default","metadata":{}},"products":[{"product_id":"product-1","product_key":"premium_monthly","product_name":"Premium","plan_id":"plan-1","plan_key":"premium","plan_name":"Premium","price_id":"price-1","amount_minor":9900,"currency":"RUB","interval_unit":"month","interval_count":1,"trial_interval_count":0,"highlighted":true,"sort_order":0,"entitlements":[{"key":"premium","name":"Premium"}]}]}"""
+    """{"placement_key":"main","products":[{"product_id":"product-1","product_key":"premium_monthly","product_name":"Premium","plan_id":"plan-1","plan_key":"premium","plan_name":"Premium","price_id":"price-1","amount_minor":9900,"currency":"RUB","interval_unit":"month","interval_count":1,"trial_interval_count":0,"highlighted":true,"sort_order":0,"entitlements":[{"key":"premium","name":"Premium"}]}]}"""
 private const val CheckoutJson =
     """{"id":"checkout-1","payment_id":"payment-1","provider_payment_id":"provider-payment-1","confirmation_url":"https://pay.example/confirm","status":"pending","expires_at":"2026-08-06T12:00:00Z","reused":false}"""

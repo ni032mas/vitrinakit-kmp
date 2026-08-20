@@ -87,20 +87,6 @@ enum class SubscriptionStatus {
 }
 
 /**
- * UI configuration for a paywall placement.
- *
- * @property template Template key selected by the server.
- * @property metadata Additional template metadata for the client UI.
- */
-@Serializable
-data class PaywallConfig(
-    /** Template key selected by the server. */
-    val template: String,
-    /** Additional template metadata for the client UI. */
-    val metadata: Map<String, String> = emptyMap(),
-)
-
-/**
  * Access right granted by a product or subscription.
  *
  * @property key Stable entitlement key used by the integrating app.
@@ -187,9 +173,6 @@ data class PaywallProduct(
  * Paywall payload returned for a placement.
  *
  * @property placementKey Placement key requested by the app.
- * @property paywallId Server-owned paywall identifier.
- * @property config Primary paywall UI configuration.
- * @property fallbackConfig Offline fallback paywall UI configuration.
  * @property products Product and price options available for purchase.
  */
 @Serializable
@@ -197,14 +180,6 @@ data class Paywall(
     /** Placement key requested by the app. */
     @SerialName("placement_key")
     val placementKey: String,
-    /** Server-owned paywall identifier. */
-    @SerialName("paywall_id")
-    val paywallId: String,
-    /** Primary paywall UI configuration. */
-    val config: PaywallConfig,
-    /** Offline fallback paywall UI configuration. */
-    @SerialName("fallback_config")
-    val fallbackConfig: PaywallConfig,
     /** Product and price options available for purchase. */
     val products: List<PaywallProduct>,
 )

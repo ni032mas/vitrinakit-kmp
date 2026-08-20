@@ -22,7 +22,7 @@ plugins {
 }
 
 group = "ru.vitrina"
-version = "0.1.0-rc.12"
+version = "0.1.0-rc.13"
 extra["googlePlayBillingVersion"] = "9.1.0"
 extra["kotlinxCoroutinesVersion"] = "1.10.2"
 extra["ruStoreBomVersion"] = "2026.07.01"

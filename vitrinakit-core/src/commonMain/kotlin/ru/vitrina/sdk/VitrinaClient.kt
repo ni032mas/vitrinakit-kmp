@@ -176,11 +176,13 @@ internal class VitrinaClient(
         request: CheckoutSessionRequest,
         externalUserId: String?,
         subscriberSession: String?,
+        idempotencyKey: String,
     ): VitrinaResult<CheckoutSession> = request(
         method = VitrinaHttpMethod.POST,
         path = "/api/v1/checkout/sessions",
         body = json.encodeToString(request),
-        additionalHeaders = subscriberHeaders(subscriberId = externalUserId, sessionToken = subscriberSession),
+        additionalHeaders = subscriberHeaders(subscriberId = externalUserId, sessionToken = subscriberSession) +
+            (IdempotencyHeader to idempotencyKey),
         decode = { payload -> json.decodeFromString<CheckoutSession>(payload) },
         errorMapper = ::checkoutError,
     )

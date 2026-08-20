@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.1.0-rc.13
+
+### Fixed
+
+- `createCheckoutSession` now sends the `Idempotency-Key` header the endpoint
+  requires. Without it the API answers 400 before it reads the body, so every
+  hosted purchase failed even after the request body was corrected in rc.12.
+  The key is created once per purchase attempt, so a retry reuses the session
+  the server already made instead of opening a second payment for one buyer.
+  Every other idempotent call in the client already sent the header; checkout
+  was the one that did not, and the request-body contract test could not see it
+  because a contract is the whole request, not only its body.
+
 ## 0.1.0-rc.12
 
 Checkout request-shape release candidate. Every hosted checkout attempt

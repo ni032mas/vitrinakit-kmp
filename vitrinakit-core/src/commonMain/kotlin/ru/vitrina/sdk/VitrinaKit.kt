@@ -3,6 +3,7 @@
 package ru.vitrina.sdk
 
 import kotlinx.coroutines.CancellationException
+import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -760,7 +761,8 @@ object VitrinaKit {
         placementId: String,
         cacheGeneration: Long,
         identityLease: IdentityOperationLease,
-    ): VitrinaKitHostedCheckoutOperation = VitrinaKitHostedCheckoutOperation { _, returnUrl ->
+    ): VitrinaKitHostedCheckoutOperation = newCheckoutIdempotencyKey().let { checkoutIdempotencyKey ->
+        VitrinaKitHostedCheckoutOperation { _, returnUrl ->
         val result = runCatching {
             identityLease.run {
                 active.client.createCheckoutSession(
@@ -771,6 +773,7 @@ object VitrinaKit {
                     ),
                     externalUserId = bound.hostedExternalUserId,
                     subscriberSession = bound.sessionToken,
+                    idempotencyKey = checkoutIdempotencyKey,
                 ).toKitResult()
             }
         }.getOrElse { throwable ->
@@ -789,6 +792,7 @@ object VitrinaKit {
         }
     }
 
+    }
     private fun hostedProfileOperation(
         current: VitrinaKitLifecycleState,
         active: VitrinaKitRuntime,
@@ -868,6 +872,7 @@ object VitrinaKit {
             )
         val cacheGeneration = active.cache.generation
         val identityLease = identityOperationLease(expected = current, bound = bound)
+        val checkoutIdempotencyKey = newCheckoutIdempotencyKey()
         val checkout = VitrinaKitHostedCheckoutOperation { _, returnUrl ->
             val result = runCatching {
                 identityLease.run {
@@ -879,6 +884,7 @@ object VitrinaKit {
                         ),
                         externalUserId = bound.hostedExternalUserId,
                         subscriberSession = bound.sessionToken,
+                        idempotencyKey = checkoutIdempotencyKey,
                     ).toKitResult()
                 }
             }.getOrElse { throwable ->
@@ -1398,3 +1404,12 @@ private fun ru.vitrina.sdk.model.VitrinaError.toKitError(): VitrinaKitError = wh
 }
 
 private const val RequiredPurchaseAdapterCount = 1
+
+private fun newCheckoutIdempotencyKey(): String = buildString {
+    repeat(CheckoutIdempotencyKeyLength) {
+        append(Random.nextInt(from = 0, until = CheckoutIdempotencyHexRadix).toString(radix = CheckoutIdempotencyHexRadix))
+    }
+}
+
+private const val CheckoutIdempotencyKeyLength = 32
+private const val CheckoutIdempotencyHexRadix = 16

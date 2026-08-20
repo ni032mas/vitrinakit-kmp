@@ -1998,9 +1998,13 @@ class VitrinaClientTest {
                 returnUrl = "vitrina://done",
             ),
             externalUserId = "user-1",
+            idempotencyKey = "idem-test",
             subscriberSession = null,
         )
 
+        // The endpoint refuses a request without this header with 400 before it reads the body,
+        // which is how every purchase failed in production while the body itself was correct.
+        assertEquals("idem-test", http.singleRequest().headers["Idempotency-Key"])
         val success = assertIs<VitrinaResult.Success<CheckoutSession>>(result)
         assertEquals("session-1", success.value.id)
         assertEquals("payment-1", success.value.paymentId)
@@ -2103,6 +2107,7 @@ class VitrinaClientTest {
         ).createCheckoutSession(
             request = checkoutSessionRequest(),
             externalUserId = "user-1",
+            idempotencyKey = "idem-test",
             subscriberSession = null,
         )
         val subscription = newClient(
@@ -2121,6 +2126,7 @@ class VitrinaClientTest {
         ).createCheckoutSession(
             request = checkoutSessionRequest(),
             externalUserId = "user-1",
+            idempotencyKey = "idem-test",
             subscriberSession = null,
         )
 
@@ -2135,6 +2141,7 @@ class VitrinaClientTest {
         ).createCheckoutSession(
             request = checkoutSessionRequest(),
             externalUserId = "user-1",
+            idempotencyKey = "idem-test",
             subscriberSession = null,
         )
         val invalid = newClient(
@@ -2142,6 +2149,7 @@ class VitrinaClientTest {
         ).createCheckoutSession(
             request = checkoutSessionRequest(),
             externalUserId = "user-1",
+            idempotencyKey = "idem-test",
             subscriberSession = null,
         )
         val active = newClient(
@@ -2149,6 +2157,7 @@ class VitrinaClientTest {
         ).createCheckoutSession(
             request = checkoutSessionRequest(),
             externalUserId = "user-1",
+            idempotencyKey = "idem-test",
             subscriberSession = null,
         )
         val emailUnverified = newClient(
@@ -2156,6 +2165,7 @@ class VitrinaClientTest {
         ).createCheckoutSession(
             request = checkoutSessionRequest(),
             externalUserId = "user-1",
+            idempotencyKey = "idem-test",
             subscriberSession = null,
         )
 

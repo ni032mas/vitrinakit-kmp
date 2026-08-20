@@ -59,26 +59,21 @@ internal data class VitrinaConfig(
 /**
  * Request for creating a hosted checkout session.
  *
- * @property externalUserId Stable user identifier from the integrating product.
- * @property productId Server-owned product identifier returned by a paywall response.
- * @property priceId Server-owned price identifier returned by a paywall response.
- * @property receiptEmail Email address used for checkout receipt delivery.
+ * Subscriber identity comes from the `X-Vitrina-Subscriber-Id` header or the bearer session, and
+ * the receipt address is the server-side verified one; neither is part of this body.
+ *
+ * @property placementKey Placement the product was loaded from.
+ * @property productReference Stable product key selected for checkout.
  * @property returnUrl URL that receives the user after provider checkout.
  */
 @Serializable
 data class CheckoutSessionRequest(
-    /** Stable user identifier from the integrating product. */
-    @SerialName("external_user_id")
-    val externalUserId: String,
-    /** Server-owned product identifier returned by a paywall response. */
-    @SerialName("product_id")
-    val productId: String,
-    /** Server-owned price identifier returned by a paywall response. */
-    @SerialName("price_id")
-    val priceId: String,
-    /** Email address used for checkout receipt delivery. */
-    @SerialName("receipt_email")
-    val receiptEmail: String,
+    /** Placement the product was loaded from. */
+    @SerialName("placement_key")
+    val placementKey: String,
+    /** Stable product key selected for checkout. */
+    @SerialName("product_reference")
+    val productReference: String,
     /** URL that receives the user after provider checkout. */
     @SerialName("return_url")
     val returnUrl: String,
@@ -177,24 +172,15 @@ internal class VitrinaClient(
         errorMapper = ::subscriberError,
     )
 
-    /**
-     * Creates a hosted checkout session for a product and price returned by a paywall response.
-     */
-    @Deprecated(
-        message = "Use the identity-bound VitrinaKit facade and a configured hosted adapter.",
-        replaceWith = ReplaceWith("VitrinaKit.purchase(product)"),
-    )
-    suspend fun createCheckoutSession(request: CheckoutSessionRequest): VitrinaResult<CheckoutSession> =
-        createCheckoutSession(request = request, subscriberSession = null)
-
     internal suspend fun createCheckoutSession(
         request: CheckoutSessionRequest,
+        externalUserId: String?,
         subscriberSession: String?,
     ): VitrinaResult<CheckoutSession> = request(
         method = VitrinaHttpMethod.POST,
         path = "/api/v1/checkout/sessions",
         body = json.encodeToString(request),
-        additionalHeaders = subscriberHeaders(subscriberId = request.externalUserId, sessionToken = subscriberSession),
+        additionalHeaders = subscriberHeaders(subscriberId = externalUserId, sessionToken = subscriberSession),
         decode = { payload -> json.decodeFromString<CheckoutSession>(payload) },
         errorMapper = ::checkoutError,
     )
@@ -503,11 +489,7 @@ internal class VitrinaClient(
                 code = code,
                 message = checkoutErrorMessage(body = body),
             )
-        } ?: if (statusCode == HttpStatusConflict) {
-            VitrinaError.Provider(body)
-        } else {
-            VitrinaError.Network(body)
-        }
+        } ?: VitrinaError.Provider(body)
 
         else -> VitrinaError.Network(body)
     }

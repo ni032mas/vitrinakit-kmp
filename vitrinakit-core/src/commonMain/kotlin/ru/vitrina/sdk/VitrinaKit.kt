@@ -288,6 +288,7 @@ object VitrinaKit {
                 active = active,
                 bound = bound,
                 product = product,
+                placementId = placementId,
                 adapter = adapter,
                 cacheGeneration = cacheGeneration,
             )
@@ -575,6 +576,7 @@ object VitrinaKit {
         active: VitrinaKitRuntime,
         bound: BoundIdentity,
         product: VitrinaKitPaywallProduct,
+        placementId: String,
         adapter: VitrinaKitHostedPurchaseAdapter,
         cacheGeneration: Long,
     ): VitrinaKitPurchaseResult {
@@ -594,6 +596,7 @@ object VitrinaKit {
                 active = active,
                 bound = bound,
                 product = product,
+                placementId = placementId,
                 adapter = adapter,
                 cacheGeneration = cacheGeneration,
             )
@@ -607,6 +610,7 @@ object VitrinaKit {
         active: VitrinaKitRuntime,
         bound: BoundIdentity,
         product: VitrinaKitPaywallProduct,
+        placementId: String,
         adapter: VitrinaKitHostedPurchaseAdapter,
         cacheGeneration: Long,
     ): VitrinaKitPurchaseResult {
@@ -619,6 +623,7 @@ object VitrinaKit {
                 active = active,
                 bound = bound,
                 product = product,
+                placementId = placementId,
                 cacheGeneration = cacheGeneration,
                 identityLease = identityLease,
             ),
@@ -752,19 +757,19 @@ object VitrinaKit {
         active: VitrinaKitRuntime,
         bound: BoundIdentity,
         product: VitrinaKitPaywallProduct,
+        placementId: String,
         cacheGeneration: Long,
         identityLease: IdentityOperationLease,
-    ): VitrinaKitHostedCheckoutOperation = VitrinaKitHostedCheckoutOperation { receiptEmail, returnUrl ->
+    ): VitrinaKitHostedCheckoutOperation = VitrinaKitHostedCheckoutOperation { _, returnUrl ->
         val result = runCatching {
             identityLease.run {
                 active.client.createCheckoutSession(
                     request = CheckoutSessionRequest(
-                        externalUserId = bound.hostedExternalUserId,
-                        productId = product.productId,
-                        priceId = product.priceId,
-                        receiptEmail = receiptEmail,
+                        placementKey = placementId,
+                        productReference = product.productKey,
                         returnUrl = returnUrl,
                     ),
+                    externalUserId = bound.hostedExternalUserId,
                     subscriberSession = bound.sessionToken,
                 ).toKitResult()
             }
@@ -857,19 +862,22 @@ object VitrinaKit {
                 "The legacy hosted purchase API requires the VitrinaKit hosted adapter.",
             ),
         )
+        val placementId = active.cache.placementForProduct(key = bound.cacheKey, product = product)
+            ?: return VitrinaKitResult.Failure(
+                VitrinaKitError.Configuration("The product must come from a VitrinaKit paywall."),
+            )
         val cacheGeneration = active.cache.generation
         val identityLease = identityOperationLease(expected = current, bound = bound)
-        val checkout = VitrinaKitHostedCheckoutOperation { receiptEmail, returnUrl ->
+        val checkout = VitrinaKitHostedCheckoutOperation { _, returnUrl ->
             val result = runCatching {
                 identityLease.run {
                     active.client.createCheckoutSession(
                         request = CheckoutSessionRequest(
-                            externalUserId = bound.hostedExternalUserId,
-                            productId = product.productId,
-                            priceId = product.priceId,
-                            receiptEmail = receiptEmail,
+                            placementKey = placementId,
+                            productReference = product.productKey,
                             returnUrl = returnUrl,
                         ),
+                        externalUserId = bound.hostedExternalUserId,
                         subscriberSession = bound.sessionToken,
                     ).toKitResult()
                 }

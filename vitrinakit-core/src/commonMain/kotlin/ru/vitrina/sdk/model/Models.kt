@@ -461,6 +461,10 @@ enum class VitrinaCheckoutErrorCode {
     /** User already has an active subscription and should not start another checkout. */
     @SerialName("checkout_active_subscription_exists")
     ACTIVE_SUBSCRIPTION_EXISTS,
+
+    /** Checkout requires a verified email before it can proceed. */
+    @SerialName("email_verification_required")
+    EMAIL_VERIFICATION_REQUIRED,
 }
 
 /** VitrinaKit SDK environment alias used by the public facade. */

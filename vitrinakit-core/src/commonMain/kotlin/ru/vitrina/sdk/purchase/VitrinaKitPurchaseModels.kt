@@ -113,6 +113,18 @@ enum class VitrinaKitPurchaseErrorCode {
     @SerialName("active_entitlement_exists")
     ACTIVE_ENTITLEMENT_EXISTS,
 
+    /** Checkout requires a receipt delivery email address. */
+    @SerialName("receipt_email_required")
+    RECEIPT_EMAIL_REQUIRED,
+
+    /** Receipt email is present but invalid. */
+    @SerialName("invalid_receipt_email")
+    INVALID_RECEIPT_EMAIL,
+
+    /** Checkout requires a verified email before it can proceed. */
+    @SerialName("email_verification_required")
+    EMAIL_VERIFICATION_REQUIRED,
+
     /** No unique ready sales channel is available. */
     @SerialName("sales_channel_unavailable")
     SALES_CHANNEL_UNAVAILABLE,

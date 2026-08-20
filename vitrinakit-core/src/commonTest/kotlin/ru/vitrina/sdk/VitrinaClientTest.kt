@@ -2128,6 +2128,11 @@ class VitrinaClientTest {
         ).createCheckoutSession(
             CheckoutSessionRequest("user-1", "product-1", "price-1", "buyer@example.com", "vitrina://done"),
         )
+        val emailUnverified = newClient(
+            http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusConflict, emailVerificationRequiredJson)),
+        ).createCheckoutSession(
+            CheckoutSessionRequest("user-1", "product-1", "price-1", "buyer@example.com", "vitrina://done"),
+        )
 
         assertEquals(
             VitrinaCheckoutErrorCode.RECEIPT_EMAIL_REQUIRED,
@@ -2141,6 +2146,11 @@ class VitrinaClientTest {
             VitrinaCheckoutErrorCode.ACTIVE_SUBSCRIPTION_EXISTS,
             assertIs<VitrinaError.Checkout>(assertIs<VitrinaResult.Failure>(active).error).code,
         )
+        val emailUnverifiedError = assertIs<VitrinaError.Checkout>(
+            assertIs<VitrinaResult.Failure>(emailUnverified).error,
+        )
+        assertEquals(VitrinaCheckoutErrorCode.EMAIL_VERIFICATION_REQUIRED, emailUnverifiedError.code)
+        assertEquals("A verified email is required before checkout.", emailUnverifiedError.message)
     }
 
     @Test
@@ -2515,3 +2525,5 @@ private const val errorJson = """{"error":"failed"}"""
 private const val receiptEmailRequiredJson = """{"error":"receipt_email_required"}"""
 private const val invalidReceiptEmailJson = """{"error":"invalid_receipt_email"}"""
 private const val activeSubscriptionJson = """{"error":"checkout_active_subscription_exists"}"""
+private const val emailVerificationRequiredJson =
+    """{"error":"email_verification_required","message":"A verified email is required before checkout."}"""

@@ -14,6 +14,8 @@ import ru.vitrina.sdk.VitrinaKitConfig
 import ru.vitrina.sdk.http.VitrinaHttpClient
 import ru.vitrina.sdk.http.VitrinaHttpRequest
 import ru.vitrina.sdk.http.VitrinaHttpResponse
+import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
+import ru.vitrina.sdk.model.VitrinaKitError
 import ru.vitrina.sdk.model.VitrinaKitResult
 import ru.vitrina.sdk.model.CheckoutSession
 import ru.vitrina.sdk.model.Entitlement
@@ -121,6 +123,45 @@ class HostedCheckoutAdapterTest {
         assertEquals(VitrinaKitPurchaseErrorCode.INVALID_REQUEST, failure.error.code)
         assertEquals(0, receiptCalls)
         assertEquals(0, checkoutCalls)
+    }
+
+    @Test
+    fun eachCheckoutErrorCodeReachesPurchaseAsItsOwnCodeWithServerMessage() = runTest {
+        val cases = listOf(
+            Triple(
+                VitrinaCheckoutErrorCode.RECEIPT_EMAIL_REQUIRED,
+                VitrinaKitPurchaseErrorCode.RECEIPT_EMAIL_REQUIRED,
+                "Checkout requires a receipt delivery email address.",
+            ),
+            Triple(
+                VitrinaCheckoutErrorCode.INVALID_RECEIPT_EMAIL,
+                VitrinaKitPurchaseErrorCode.INVALID_RECEIPT_EMAIL,
+                "Receipt email is invalid.",
+            ),
+            Triple(
+                VitrinaCheckoutErrorCode.ACTIVE_SUBSCRIPTION_EXISTS,
+                VitrinaKitPurchaseErrorCode.ACTIVE_ENTITLEMENT_EXISTS,
+                "An active subscription already exists.",
+            ),
+            Triple(
+                VitrinaCheckoutErrorCode.EMAIL_VERIFICATION_REQUIRED,
+                VitrinaKitPurchaseErrorCode.EMAIL_VERIFICATION_REQUIRED,
+                "A verified email is required before checkout.",
+            ),
+        )
+        val adapter = HostedCheckoutAdapter(hostedConfiguration())
+
+        cases.forEach { (checkoutCode, purchaseCode, serverMessage) ->
+            val result = adapter.purchase(
+                hostedRequestWithCheckoutFailure(
+                    error = VitrinaKitError.Checkout(code = checkoutCode, message = serverMessage),
+                ),
+            )
+
+            val failure = assertIs<VitrinaKitPurchaseResult.Failure>(result)
+            assertEquals(purchaseCode, failure.error.code)
+            assertEquals(serverMessage, failure.error.message)
+        }
     }
 
     @Test
@@ -722,6 +763,14 @@ private fun hostedRequest(
     product = hostedProduct(),
     checkout = VitrinaKitHostedCheckoutOperation { _, _ -> VitrinaKitResult.Success(checkout()) },
     profile = VitrinaKitHostedProfileOperation { VitrinaKitResult.Success(profile()) },
+)
+
+private fun hostedRequestWithCheckoutFailure(
+    error: VitrinaKitError,
+): VitrinaKitHostedPurchaseRequest = VitrinaKitHostedPurchaseRequest(
+    product = hostedProduct(),
+    checkout = VitrinaKitHostedCheckoutOperation { _, _ -> VitrinaKitResult.Failure(error) },
+    profile = VitrinaKitHostedProfileOperation { VitrinaKitResult.Success(inactiveProfile()) },
 )
 
 private fun checkoutSession(

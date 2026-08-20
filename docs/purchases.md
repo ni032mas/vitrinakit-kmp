@@ -102,6 +102,33 @@ launcher. A return/deep link is only a signal to refresh authoritative state;
 navigation never proves payment. Persist only `HostedCheckoutResumeState` using
 platform-protected storage. Do not persist checkout URLs or receipt addresses.
 
+### Email verification required
+
+Hosted checkout refuses a subscriber without a verified email with
+`VitrinaKitPurchaseErrorCode.EMAIL_VERIFICATION_REQUIRED`. Resolve it inline
+before retrying the purchase:
+
+```kotlin
+when (val result = VitrinaKit.purchase(selectedProduct)) {
+    is VitrinaKitPurchaseResult.Failure -> when (result.error.code) {
+        VitrinaKitPurchaseErrorCode.EMAIL_VERIFICATION_REQUIRED -> {
+            VitrinaKit.requestEmailVerification(email)
+            val code = collectCodeFromUser()
+            when (VitrinaKit.confirmEmailVerification(email, code)) {
+                is VitrinaKitResult.Success -> VitrinaKit.purchase(selectedProduct)
+                is VitrinaKitResult.Failure -> showVerificationFailure()
+            }
+        }
+        else -> showFailure()
+    }
+    else -> Unit
+}
+```
+
+`RECEIPT_EMAIL_REQUIRED`, `INVALID_RECEIPT_EMAIL`, and
+`ACTIVE_ENTITLEMENT_EXISTS` reach `purchase()` the same way, each as its own
+code with the server's explanatory message attached.
+
 On iOS, build the hosted binary with:
 
 ```bash

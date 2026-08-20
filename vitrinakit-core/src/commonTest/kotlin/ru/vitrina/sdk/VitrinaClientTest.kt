@@ -45,7 +45,6 @@ import ru.vitrina.sdk.model.BillingIntervalUnit
 import ru.vitrina.sdk.model.CheckoutSession
 import ru.vitrina.sdk.model.Entitlement
 import ru.vitrina.sdk.model.Paywall
-import ru.vitrina.sdk.model.PaywallConfig
 import ru.vitrina.sdk.model.PaywallProduct
 import ru.vitrina.sdk.model.EntitlementSource
 import ru.vitrina.sdk.model.SubscriberEntitlementState
@@ -1381,9 +1380,6 @@ class VitrinaClientTest {
     fun facadeReturnsProductsFromPaywall() {
         val paywall = Paywall(
             placementKey = "main",
-            paywallId = "paywall-1",
-            config = PaywallConfig(template = "default"),
-            fallbackConfig = PaywallConfig(template = "fallback"),
             products = listOf(monthlyProduct()),
         )
 
@@ -2081,9 +2077,6 @@ class VitrinaClientTest {
         val client = newClient()
         val fallback = Paywall(
             placementKey = "main",
-            paywallId = "fallback",
-            config = PaywallConfig(template = "fallback"),
-            fallbackConfig = PaywallConfig(template = "fallback"),
             products = emptyList(),
         )
 
@@ -2471,9 +2464,6 @@ private fun monthlyProduct(): PaywallProduct = PaywallProduct(
 private val paywallJson = json.encodeToString(
     Paywall(
         placementKey = "main",
-        paywallId = "paywall-1",
-        config = PaywallConfig(template = "default"),
-        fallbackConfig = PaywallConfig(template = "fallback"),
         products = listOf(monthlyProduct()),
     ),
 )

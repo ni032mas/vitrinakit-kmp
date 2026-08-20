@@ -1425,6 +1425,7 @@ class VitrinaClientTest {
     fun deprecatedHostedPurchaseDelegatesThroughCoreBoundCheckoutAndIgnoresPerCallFields() = runTest {
         val http = QueueHttpClient(
             VitrinaHttpResponse(HttpStatusOk, subscriberJson),
+            VitrinaHttpResponse(HttpStatusOk, paywallJson),
             VitrinaHttpResponse(HttpStatusCreated, checkoutJson),
         )
         val adapter = FacadeHostedMigrationAdapter()
@@ -1436,9 +1437,10 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
 
         val result = VitrinaKit.makePurchase(
-            product = monthlyProduct(),
+            product = product,
             userId = "untrusted-per-call-user",
             receiptEmail = "untrusted@example.com",
             returnUrl = "untrusted://return",
@@ -1447,8 +1449,9 @@ class VitrinaClientTest {
         assertEquals("session-1", assertIs<VitrinaKitResult.Success<VitrinaKitPurchase>>(result).value.id)
         assertEquals("bound-user", adapter.lastRequest?.externalUserId)
         assertEquals("premium_monthly", adapter.lastRequest?.product?.productKey)
-        assertEquals("bound-user", http.requests.last().jsonBodyValue("external_user_id"))
-        assertEquals("configured@example.com", http.requests.last().jsonBodyValue("receipt_email"))
+        assertEquals("bound-user", http.requests.last().headers["X-Vitrina-Subscriber-Id"])
+        assertEquals("main", http.requests.last().jsonBodyValue("placement_key"))
+        assertEquals("premium_monthly", http.requests.last().jsonBodyValue("product_reference"))
         assertEquals("vitrinakit-test://configured", http.requests.last().jsonBodyValue("return_url"))
         assertEquals("PublishableKey pk_test", http.requests.last().headers["Authorization"])
         assertFalse(http.requests.last().body.orEmpty().contains("untrusted-per-call-user"))
@@ -1461,6 +1464,7 @@ class VitrinaClientTest {
         val subscriberSession = "subscriber-session-secret"
         val http = QueueHttpClient(
             VitrinaHttpResponse(HttpStatusOk, subscriberJson),
+            VitrinaHttpResponse(HttpStatusOk, paywallJson),
             VitrinaHttpResponse(HttpStatusCreated, checkoutJson),
         )
         val adapter = FacadeHostedMigrationAdapter()
@@ -1472,9 +1476,10 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.setSubscriberSession(session = subscriberSession)
+        val product = cachedMonthlyProduct()
 
         val result = VitrinaKit.makePurchase(
-            product = monthlyProduct(),
+            product = product,
             userId = "untrusted-per-call-user",
             receiptEmail = "untrusted@example.com",
             returnUrl = "untrusted://return",
@@ -1484,8 +1489,9 @@ class VitrinaClientTest {
         val checkoutRequest = http.requests.last()
         assertEquals("Bearer $subscriberSession", checkoutRequest.headers["Authorization"])
         assertFalse(checkoutRequest.headers.values.any { value -> value.contains("pk_test") })
-        assertEquals("user-1", checkoutRequest.jsonBodyValue("external_user_id"))
-        assertEquals("configured@example.com", checkoutRequest.jsonBodyValue("receipt_email"))
+        assertFalse(checkoutRequest.headers.containsKey("X-Vitrina-Subscriber-Id"))
+        assertEquals("main", checkoutRequest.jsonBodyValue("placement_key"))
+        assertEquals("premium_monthly", checkoutRequest.jsonBodyValue("product_reference"))
         assertEquals("vitrinakit-test://configured", checkoutRequest.jsonBodyValue("return_url"))
         assertFalse(adapter.lastRequest.toString().contains(subscriberSession))
         assertFalse(checkoutRequest.toString().contains(subscriberSession))
@@ -1506,6 +1512,7 @@ class VitrinaClientTest {
                     }
                     VitrinaHttpResponse(HttpStatusOk, identifyResponseJson(userId))
                 }
+                "/api/v1/paywall/main" -> VitrinaHttpResponse(HttpStatusOk, paywallJson)
                 "/api/v1/checkout/sessions" -> {
                     checkoutReachedBoundary.complete(Unit)
                     releaseCheckout.await()
@@ -1523,10 +1530,11 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
 
         val purchasing = async {
             VitrinaKit.makePurchase(
-                product = monthlyProduct(),
+                product = product,
                 userId = "ignored",
                 receiptEmail = "ignored@example.com",
                 returnUrl = "ignored://return",
@@ -1580,6 +1588,7 @@ class VitrinaClientTest {
                     HttpStatusOk,
                     identifyResponseJson(request.headers.getValue("X-Vitrina-Subscriber-Id")),
                 )
+                "/api/v1/paywall/main" -> VitrinaHttpResponse(HttpStatusOk, paywallJson)
                 "/api/v1/checkout/sessions" -> {
                     checkoutReachedBoundary.complete(Unit)
                     releaseCheckout.await()
@@ -1596,10 +1605,11 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
 
         val purchasing = async {
             VitrinaKit.makePurchase(
-                product = monthlyProduct(),
+                product = product,
                 userId = "ignored",
                 receiptEmail = "ignored@example.com",
                 returnUrl = "ignored://return",
@@ -1644,8 +1654,9 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
 
-        val purchasing = async { makeIgnoredHostedPurchase() }
+        val purchasing = async { makeIgnoredHostedPurchase(product) }
         checkoutReachedBoundary.await()
         runCurrent()
         val purchaseCompletedBeforeCheckout = purchasing.isCompleted
@@ -1682,8 +1693,9 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
 
-        val purchasing = async { makeIgnoredHostedPurchase() }
+        val purchasing = async { makeIgnoredHostedPurchase(product) }
         checkoutReachedBoundary.await()
         purchasing.cancel()
         runCurrent()
@@ -1716,6 +1728,7 @@ class VitrinaClientTest {
         }
         val http = QueueHttpClient(
             VitrinaHttpResponse(HttpStatusOk, subscriberJson),
+            VitrinaHttpResponse(HttpStatusOk, paywallJson),
             VitrinaHttpResponse(HttpStatusCreated, checkoutJson),
         )
         VitrinaKit.activate(
@@ -1726,9 +1739,10 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
 
         val result = VitrinaKit.makePurchase(
-            product = monthlyProduct(),
+            product = product,
             userId = "ignored",
             receiptEmail = "ignored@example.com",
             returnUrl = "ignored://return",
@@ -1766,6 +1780,7 @@ class VitrinaClientTest {
                         HttpStatusOk,
                         identifyResponseJson(request.headers.getValue("X-Vitrina-Subscriber-Id")),
                     )
+                    "/api/v1/paywall/main" -> VitrinaHttpResponse(HttpStatusOk, paywallJson)
                     else -> error("Unexpected request: ${request.path}")
                 }
             }
@@ -1778,9 +1793,10 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
         val closeCountBeforePurchase = closeCount
 
-        val purchase = makeIgnoredHostedPurchase()
+        val purchase = makeIgnoredHostedPurchase(product)
 
         assertIs<VitrinaKitResult.Success<VitrinaKitPurchase>>(purchase)
         assertIs<VitrinaKitError.Configuration>(
@@ -1820,6 +1836,7 @@ class VitrinaClientTest {
         }
         val http = QueueHttpClient(
             VitrinaHttpResponse(HttpStatusOk, subscriberJson),
+            VitrinaHttpResponse(HttpStatusOk, paywallJson),
             VitrinaHttpResponse(HttpStatusOk, identifyResponseJson("replacement")),
         )
         VitrinaKit.activate(
@@ -1830,8 +1847,9 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
 
-        val purchasing = async { makeIgnoredHostedPurchase() }
+        val purchasing = async { makeIgnoredHostedPurchase(product) }
         detachedStarted.await()
         assertIs<VitrinaKitResult.Success<VitrinaKitPurchase>>(purchasing.await())
         releaseDetached.complete(Unit)
@@ -1851,7 +1869,10 @@ class VitrinaClientTest {
                 VitrinaKitResult.Success(hostedPurchase())
             },
         )
-        val http = QueueHttpClient(VitrinaHttpResponse(HttpStatusOk, subscriberJson))
+        val http = QueueHttpClient(
+            VitrinaHttpResponse(HttpStatusOk, subscriberJson),
+            VitrinaHttpResponse(HttpStatusOk, paywallJson),
+        )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
                 .withInstallationIdStorage(MemoryInstallationIdStorage())
@@ -1861,10 +1882,11 @@ class VitrinaClientTest {
         )
 
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
         val closeCountBeforePurchase = adapter.closeCount
         val purchasing = async {
             VitrinaKit.makePurchase(
-                product = monthlyProduct(),
+                product = product,
                 userId = "ignored",
                 receiptEmail = "ignored@example.com",
                 returnUrl = "ignored://return",
@@ -1890,6 +1912,7 @@ class VitrinaClientTest {
                     HttpStatusOk,
                     identifyResponseJson(request.headers.getValue("X-Vitrina-Subscriber-Id")),
                 )
+                "/api/v1/paywall/main" -> VitrinaHttpResponse(HttpStatusOk, paywallJson)
                 "/api/v1/checkout/sessions" -> throw CancellationException("cancelled")
                 else -> error("Unexpected request: ${request.path}")
             }
@@ -1902,10 +1925,11 @@ class VitrinaClientTest {
                 .build(),
         )
         VitrinaKit.identify(userId = "bound-user")
+        val product = cachedMonthlyProduct()
 
         assertFailsWith<CancellationException> {
             VitrinaKit.makePurchase(
-                product = monthlyProduct(),
+                product = product,
                 userId = "ignored",
                 receiptEmail = "ignored@example.com",
                 returnUrl = "ignored://return",
@@ -1968,13 +1992,13 @@ class VitrinaClientTest {
         val client = newClient(http = http)
 
         val result = client.createCheckoutSession(
-            CheckoutSessionRequest(
-                externalUserId = "user-1",
-                productId = "product-1",
-                priceId = "price-1",
-                receiptEmail = "buyer@example.com",
+            request = CheckoutSessionRequest(
+                placementKey = "main",
+                productReference = "premium_monthly",
                 returnUrl = "vitrina://done",
             ),
+            externalUserId = "user-1",
+            subscriberSession = null,
         )
 
         val success = assertIs<VitrinaResult.Success<CheckoutSession>>(result)
@@ -1987,27 +2011,11 @@ class VitrinaClientTest {
         assertEquals(false, success.value.reused)
         assertEquals("/api/v1/checkout/sessions", http.singleRequest().path)
         assertEquals(VitrinaHttpMethod.POST, http.singleRequest().method)
-        assertEquals("buyer@example.com", http.singleRequest().jsonBodyValue("receipt_email"))
-    }
-
-    @Test
-    fun checkoutSessionRequestSerializesReceiptEmail() {
-        val payload = json.encodeToString(
-            CheckoutSessionRequest(
-                externalUserId = "user-1",
-                productId = "product-1",
-                priceId = "price-1",
-                receiptEmail = "buyer@example.com",
-                returnUrl = "vitrina://done",
-            ),
-        )
-
-        val body = Json.parseToJsonElement(payload).jsonObject
-        assertEquals("user-1", body.getValue("external_user_id").jsonPrimitive.content)
-        assertEquals("product-1", body.getValue("product_id").jsonPrimitive.content)
-        assertEquals("price-1", body.getValue("price_id").jsonPrimitive.content)
-        assertEquals("buyer@example.com", body.getValue("receipt_email").jsonPrimitive.content)
-        assertEquals("vitrina://done", body.getValue("return_url").jsonPrimitive.content)
+        assertEquals("main", http.singleRequest().jsonBodyValue("placement_key"))
+        assertEquals("premium_monthly", http.singleRequest().jsonBodyValue("product_reference"))
+        assertEquals("user-1", http.singleRequest().headers["X-Vitrina-Subscriber-Id"])
+        assertFalse(http.singleRequest().body.orEmpty().contains("receipt_email"))
+        assertFalse(http.singleRequest().body.orEmpty().contains("external_user_id"))
     }
 
     @Test
@@ -2093,7 +2101,9 @@ class VitrinaClientTest {
         val provider = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusConflict, errorJson)),
         ).createCheckoutSession(
-            CheckoutSessionRequest("user-1", "product-1", "price-1", "buyer@example.com", "vitrina://done"),
+            request = checkoutSessionRequest(),
+            externalUserId = "user-1",
+            subscriberSession = null,
         )
         val subscription = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusNotFound, errorJson)),
@@ -2105,26 +2115,48 @@ class VitrinaClientTest {
     }
 
     @Test
+    fun unrecognizedCheckoutBadRequestSurfacesTheServerBodyInsteadOfANetworkError() = runTest {
+        val result = newClient(
+            http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusBadRequest, errorJson)),
+        ).createCheckoutSession(
+            request = checkoutSessionRequest(),
+            externalUserId = "user-1",
+            subscriberSession = null,
+        )
+
+        val failure = assertIs<VitrinaError.Provider>(assertIs<VitrinaResult.Failure>(result).error)
+        assertEquals(errorJson, failure.message)
+    }
+
+    @Test
     fun checkoutValidationErrorsMapToTypedCheckoutErrors() = runTest {
         val required = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusBadRequest, receiptEmailRequiredJson)),
         ).createCheckoutSession(
-            CheckoutSessionRequest("user-1", "product-1", "price-1", "", "vitrina://done"),
+            request = checkoutSessionRequest(),
+            externalUserId = "user-1",
+            subscriberSession = null,
         )
         val invalid = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusBadRequest, invalidReceiptEmailJson)),
         ).createCheckoutSession(
-            CheckoutSessionRequest("user-1", "product-1", "price-1", "bad", "vitrina://done"),
+            request = checkoutSessionRequest(),
+            externalUserId = "user-1",
+            subscriberSession = null,
         )
         val active = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusConflict, activeSubscriptionJson)),
         ).createCheckoutSession(
-            CheckoutSessionRequest("user-1", "product-1", "price-1", "buyer@example.com", "vitrina://done"),
+            request = checkoutSessionRequest(),
+            externalUserId = "user-1",
+            subscriberSession = null,
         )
         val emailUnverified = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusConflict, emailVerificationRequiredJson)),
         ).createCheckoutSession(
-            CheckoutSessionRequest("user-1", "product-1", "price-1", "buyer@example.com", "vitrina://done"),
+            request = checkoutSessionRequest(),
+            externalUserId = "user-1",
+            subscriberSession = null,
         )
 
         assertEquals(
@@ -2413,6 +2445,7 @@ private fun hostedBoundaryHttpClient(
             HttpStatusOk,
             identifyResponseJson(request.headers.getValue("X-Vitrina-Subscriber-Id")),
         )
+        "/api/v1/paywall/main" -> VitrinaHttpResponse(HttpStatusOk, paywallJson)
         "/api/v1/checkout/sessions" -> {
             checkoutReachedBoundary.complete(Unit)
             releaseCheckout.await()
@@ -2422,8 +2455,10 @@ private fun hostedBoundaryHttpClient(
     }
 }
 
-private suspend fun makeIgnoredHostedPurchase(): VitrinaKitResult<VitrinaKitPurchase> = VitrinaKit.makePurchase(
-    product = monthlyProduct(),
+private suspend fun makeIgnoredHostedPurchase(
+    product: PaywallProduct,
+): VitrinaKitResult<VitrinaKitPurchase> = VitrinaKit.makePurchase(
+    product = product,
     userId = "ignored",
     receiptEmail = "ignored@example.com",
     returnUrl = "ignored://return",
@@ -2443,6 +2478,19 @@ private const val HttpStatusConflict = 409
 private const val HttpStatusServiceUnavailable = 503
 
 private val json = Json { encodeDefaults = true }
+
+private suspend fun cachedMonthlyProduct(placementId: String = "main"): PaywallProduct =
+    assertIs<VitrinaKitResult.Success<VitrinaKitPaywall>>(VitrinaKit.getPaywall(placementId)).value.products.single()
+
+private fun checkoutSessionRequest(
+    placementKey: String = "main",
+    productReference: String = "premium_monthly",
+    returnUrl: String = "vitrina://done",
+): CheckoutSessionRequest = CheckoutSessionRequest(
+    placementKey = placementKey,
+    productReference = productReference,
+    returnUrl = returnUrl,
+)
 
 private fun monthlyProduct(): PaywallProduct = PaywallProduct(
     productId = "product-1",

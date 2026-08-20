@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## 0.1.0-rc.12
+
+Checkout request-shape release candidate. Every hosted checkout attempt
+failed with a `400` in production because the SDK sent a body the API
+rejects and omitted the two fields it requires.
+
+### Fixed
+
+- `CheckoutSessionRequest` now sends `placement_key` and `product_reference`
+  and no longer sends `external_user_id`, `product_id`, `price_id`, or
+  `receipt_email`. The handler decodes with unknown fields disallowed, so the
+  old body was rejected outright; subscriber identity comes from the
+  `X-Vitrina-Subscriber-Id` header or the bearer session, and the receipt
+  address is the server-side verified one. The placement is now carried with
+  the cached paywall the product was loaded from — both `VitrinaKit.purchase`
+  and the deprecated `VitrinaKit.makePurchase` reject a product that did not
+  come from `getPaywall` instead of sending a checkout request with no
+  placement.
+- A `4xx` checkout response whose `code` this SDK does not recognize no
+  longer surfaces as `VitrinaKitError.Network`. A response the server sent is
+  never a network failure; it now maps to `VitrinaKitError.Provider` with the
+  server's body, matching the existing `409` fallback.
+
+### Note
+
+- `HostedCheckoutConfiguration.receiptEmail` is no longer read into the
+  checkout request body (the server owns the verified receipt address). The
+  callback itself is left in place for this release to avoid an unscoped
+  breaking change to the hosted-adapter API while this fix ships; removing it
+  is tracked as follow-up cleanup.
+
 ## 0.1.0-rc.11
 
 Paywall response shape release candidate. Every paywall load failed to parse

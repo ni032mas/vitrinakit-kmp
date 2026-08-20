@@ -88,8 +88,10 @@ class HostedCheckoutAdapterTest {
         val checkout = http.requests.single { it.path == "/api/v1/checkout/sessions" }
         assertEquals("Bearer opaque-session", checkout.headers["Authorization"])
         assertFalse(checkout.headers.containsKey("X-Vitrina-Subscriber-Id"))
-        assertTrue(checkout.body.orEmpty().contains("buyer@example.com"))
+        assertTrue(checkout.body.orEmpty().contains("\"placement_key\":\"main\""))
+        assertTrue(checkout.body.orEmpty().contains("\"product_reference\":\"premium_monthly\""))
         assertTrue(checkout.body.orEmpty().contains("vitrinakit-test://checkout-return"))
+        assertFalse(checkout.body.orEmpty().contains("buyer@example.com"))
         assertFalse(checkout.body.orEmpty().contains("capability"))
         assertTrue(http.requests.none { it.path.startsWith("/api/v1/purchase-attempts") })
     }
@@ -599,8 +601,10 @@ class HostedCheckoutAdapterTest {
         val success = assertIs<VitrinaKitResult.Success<CheckoutSession>>(result)
         assertEquals("checkout-1", success.value.id)
         val body = http.requests.single { it.path == "/api/v1/checkout/sessions" }.body.orEmpty()
-        assertTrue(body.contains("buyer@example.com"))
+        assertTrue(body.contains("\"placement_key\":\"main\""))
+        assertTrue(body.contains("\"product_reference\":\"premium_monthly\""))
         assertTrue(body.contains("vitrinakit-test://return"))
+        assertFalse(body.contains("buyer@example.com"))
         assertFalse(body.contains("ignored-user"))
         assertFalse(body.contains("ignored@example.com"))
         assertFalse(body.contains("ignored://return"))

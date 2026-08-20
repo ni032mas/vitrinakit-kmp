@@ -5,6 +5,7 @@ package ru.vitrina.sdk.hosted
 import io.ktor.http.Url
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
+import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
 import ru.vitrina.sdk.model.VitrinaKitError
 import ru.vitrina.sdk.model.VitrinaKitProfile
 import ru.vitrina.sdk.model.VitrinaKitPurchase
@@ -257,18 +258,26 @@ private fun VitrinaKitError.toPurchaseError(): VitrinaKitPurchaseError = Vitrina
     code = when (this) {
         is VitrinaKitError.Auth -> VitrinaKitPurchaseErrorCode.SUBSCRIBER_AUTH_REQUIRED
         is VitrinaKitError.Network -> VitrinaKitPurchaseErrorCode.NETWORK_ERROR
-        is VitrinaKitError.Checkout -> VitrinaKitPurchaseErrorCode.INVALID_REQUEST
+        is VitrinaKitError.Checkout -> code.toPurchaseErrorCode()
         is VitrinaKitError.Configuration -> VitrinaKitPurchaseErrorCode.INVALID_REQUEST
         is VitrinaKitError.Provider -> VitrinaKitPurchaseErrorCode.ADAPTER_FAILURE
         is VitrinaKitError.Subscription -> VitrinaKitPurchaseErrorCode.SERVER_VALIDATION_FAILED
     },
     message = when (this) {
         is VitrinaKitError.Network -> "Hosted checkout network request failed."
+        is VitrinaKitError.Checkout -> message.ifBlank { "Hosted checkout request failed." }
         else -> "Hosted checkout request failed."
     },
     retryable = this is VitrinaKitError.Network,
     supportReference = null,
 )
+
+private fun VitrinaCheckoutErrorCode.toPurchaseErrorCode(): VitrinaKitPurchaseErrorCode = when (this) {
+    VitrinaCheckoutErrorCode.RECEIPT_EMAIL_REQUIRED -> VitrinaKitPurchaseErrorCode.RECEIPT_EMAIL_REQUIRED
+    VitrinaCheckoutErrorCode.INVALID_RECEIPT_EMAIL -> VitrinaKitPurchaseErrorCode.INVALID_RECEIPT_EMAIL
+    VitrinaCheckoutErrorCode.ACTIVE_SUBSCRIPTION_EXISTS -> VitrinaKitPurchaseErrorCode.ACTIVE_ENTITLEMENT_EXISTS
+    VitrinaCheckoutErrorCode.EMAIL_VERIFICATION_REQUIRED -> VitrinaKitPurchaseErrorCode.EMAIL_VERIFICATION_REQUIRED
+}
 
 private fun purchaseFailure(
     code: VitrinaKitPurchaseErrorCode,

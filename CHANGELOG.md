@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- Checkout refused for a missing verified email now surfaces
+  `VitrinaCheckoutErrorCode.EMAIL_VERIFICATION_REQUIRED` instead of a generic
+  server failure. `HostedCheckoutAdapter.purchase()` no longer collapses every
+  checkout condition into `INVALID_REQUEST` with a placeholder message —
+  `RECEIPT_EMAIL_REQUIRED`, `INVALID_RECEIPT_EMAIL`,
+  `ACTIVE_SUBSCRIPTION_EXISTS`, and `EMAIL_VERIFICATION_REQUIRED` each reach
+  `purchase()` as their own `VitrinaKitPurchaseErrorCode` with the server's
+  explanatory message attached.
+
 ## 0.1.0-rc.9
 
 JVM target pinning release candidate.

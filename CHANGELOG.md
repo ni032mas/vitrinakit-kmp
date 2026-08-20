@@ -2,8 +2,28 @@
 
 ## Unreleased
 
+## 0.1.0-rc.10
+
+Android target release candidate. An Android integrator on an earlier RC gets a
+completely inert SDK; upgrading is the only fix.
+
 ### Fixed
 
+- The SDK now publishes an Android target, `vitrinakit-kmp-sdk-android`.
+  Previously `vitrinakit-core` declared only `jvm()` and iOS targets, so an
+  Android consumer resolved `vitrinakit-kmp-sdk-jvm` and ran the JVM build on a
+  phone. Its default installation-id storage persists through
+  `java.util.prefs`, which has no working backing store on Android: `activate()`
+  failed, every later call short-circuited to `notActivated()` without a network
+  request, and the integration was inert while looking configured. The Android
+  default storage is backed by `SharedPreferences` and is discovered through an
+  `androidx.startup` initializer, so an integrator supplies nothing.
+- `VitrinaKitConfig.Builder` no longer constructs the default storage eagerly.
+  A caller that supplied its own storage still triggered the JVM default, which
+  logged `java.util.prefs` warnings on every Android launch even when unused.
+- Published Android artifacts now ship consumer ProGuard rules; they previously
+  contained none, leaving every integrator with `isMinifyEnabled = true` to
+  discover the keep rules themselves.
 - Checkout refused for a missing verified email now surfaces
   `VitrinaCheckoutErrorCode.EMAIL_VERIFICATION_REQUIRED` instead of a generic
   server failure. `HostedCheckoutAdapter.purchase()` no longer collapses every

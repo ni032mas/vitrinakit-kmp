@@ -91,23 +91,27 @@ class VitrinaClientTest {
         val missing = VitrinaKit.activate(VitrinaKitConfig.Builder("pk_test").build())
         val duplicate = VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
         )
         val mixed = VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .withHostedMigrationAdapter(FacadeHostedMigrationAdapter())
                 .build(),
         )
         val hosted = VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHostedMigrationAdapter(FacadeHostedMigrationAdapter())
                 .build(),
         )
         val active = VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
         )
@@ -360,6 +364,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -428,6 +433,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -465,6 +471,7 @@ class VitrinaClientTest {
         val adapter = DefaultRecoveryFacadeAdapter()
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -491,6 +498,7 @@ class VitrinaClientTest {
         assertEquals(null, VitrinaKit.onForeground())
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -540,6 +548,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -589,6 +598,7 @@ class VitrinaClientTest {
         }
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
@@ -641,6 +651,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -690,6 +701,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -709,6 +721,7 @@ class VitrinaClientTest {
         val busy = VitrinaKit.logout()
         val busyActivation = VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_replacement")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
         )
@@ -752,6 +765,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -806,6 +820,7 @@ class VitrinaClientTest {
         }
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
@@ -919,6 +934,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -977,6 +993,7 @@ class VitrinaClientTest {
         }
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(FacadeHostedMigrationAdapter())
                 .build(),
@@ -1021,6 +1038,7 @@ class VitrinaClientTest {
         }
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(FacadeHostedMigrationAdapter())
                 .build(),
@@ -1078,6 +1096,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(adapter)
                 .build(),
@@ -1125,6 +1144,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
@@ -1155,6 +1175,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
@@ -1331,6 +1352,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
@@ -1376,6 +1398,7 @@ class VitrinaClientTest {
         val http = QueueHttpClient(VitrinaHttpResponse(HttpStatusOk, subscriberJson))
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
@@ -1411,6 +1434,7 @@ class VitrinaClientTest {
         val adapter = FacadeHostedMigrationAdapter()
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1446,6 +1470,7 @@ class VitrinaClientTest {
         val adapter = FacadeHostedMigrationAdapter()
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1496,6 +1521,7 @@ class VitrinaClientTest {
         }
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(FacadeHostedMigrationAdapter())
                 .build(),
@@ -1568,6 +1594,7 @@ class VitrinaClientTest {
         }
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1615,6 +1642,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1652,6 +1680,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1695,6 +1724,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1746,6 +1776,7 @@ class VitrinaClientTest {
         }
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1797,6 +1828,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1826,6 +1858,7 @@ class VitrinaClientTest {
         val http = QueueHttpClient(VitrinaHttpResponse(HttpStatusOk, subscriberJson))
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1867,6 +1900,7 @@ class VitrinaClientTest {
         }
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withHostedMigrationAdapter(adapter)
                 .build(),
@@ -1890,6 +1924,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
@@ -1911,6 +1946,7 @@ class VitrinaClientTest {
         )
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withHttpClient(http)
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
@@ -2111,6 +2147,7 @@ class VitrinaClientTest {
     fun deprecatedHostedPurchaseDoesNotBypassAdapterBoundary() = runTest {
         VitrinaKit.activate(
             VitrinaKitConfig.Builder("pk_test")
+                .withInstallationIdStorage(MemoryInstallationIdStorage())
                 .withPurchaseAdapter(FacadePurchaseAdapter())
                 .build(),
         )

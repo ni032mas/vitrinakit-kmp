@@ -1,6 +1,7 @@
 import org.gradle.api.DefaultTask
 import org.gradle.api.tasks.Delete
 import org.gradle.api.artifacts.ProjectDependency
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
@@ -47,6 +48,7 @@ private val moduleProjectPaths = setOf(
 private val coreArtifactIds = setOf(
     "vitrinakit-kmp-sdk",
     "vitrinakit-kmp-sdk-jvm",
+    "vitrinakit-kmp-sdk-android",
     "vitrinakit-kmp-sdk-iosarm64",
     "vitrinakit-kmp-sdk-iossimulatorarm64",
 )
@@ -66,6 +68,7 @@ private val expectedArtifactBaseIds = coreArtifactIds + setOf(
 // The root "kotlinMultiplatform" and Apple publications carry no JVM bytecode and are excluded.
 private val jvmBytecodeArtifactBaseIds = setOf(
     "vitrinakit-kmp-sdk-jvm",
+    "vitrinakit-kmp-sdk-android",
     "vitrinakit-googleplay-android",
     "vitrinakit-hosted-android",
     "vitrinakit-hosted-jvm",
@@ -624,6 +627,7 @@ tasks.register("test") {
     description = "Runs all SDK unit test targets."
     dependsOn(
         ":vitrinakit-core:jvmTest",
+        ":vitrinakit-core:testAndroidHostTest",
         ":vitrinakit-hosted:jvmTest",
         ":vitrinakit-googleplay:testAndroidHostTest",
         ":vitrinakit-rustore:testAndroidHostTest",
@@ -679,16 +683,19 @@ tasks.register("verifyReleaseArtifacts", VerifyReleaseArtifactsTask::class) {
     ruStorePayVersion.set(rootProject.extra["ruStorePayVersion"] as String)
     ruStoreResolvedPayVersion.set(
         providers.provider {
+            // Resolves the dependency graph rather than artifacts: vitrinakit-core now publishes
+            // its own Android variant, and that variant's secondary artifacts (lint, art-profile,
+            // consumer-proguard-rules, ...) make plain artifact resolution of this classpath
+            // ambiguous. The component graph has no such ambiguity and is all this needs.
             project(":vitrinakit-rustore")
                 .configurations
                 .getByName("androidRuntimeClasspath")
-                .resolvedConfiguration
-                .resolvedArtifacts
-                .single { artifact ->
-                    artifact.moduleVersion.id.group == "ru.rustore.sdk" &&
-                        artifact.name == "pay"
-                }
-                .moduleVersion.id.version
+                .incoming
+                .resolutionResult
+                .allComponents
+                .mapNotNull { component -> component.id as? ModuleComponentIdentifier }
+                .single { id -> id.group == "ru.rustore.sdk" && id.module == "pay" }
+                .version
         },
     )
     dependsOn(

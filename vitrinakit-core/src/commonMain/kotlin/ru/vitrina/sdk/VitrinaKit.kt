@@ -67,7 +67,7 @@ class VitrinaKitConfig private constructor(
         private val publicApiKey: String,
     ) {
         private var httpClient: VitrinaHttpClient? = null
-        private var installationIdStorage: VitrinaKitInstallationIdStorage = defaultInstallationIdStorage()
+        private var installationIdStorage: VitrinaKitInstallationIdStorage? = null
         private val purchaseAdapters = mutableListOf<VitrinaKitPurchaseAdapter>()
         private val hostedMigrationAdapters = mutableListOf<VitrinaKitHostedMigrationAdapter>()
 
@@ -102,7 +102,7 @@ class VitrinaKitConfig private constructor(
         fun build(): VitrinaKitConfig = VitrinaKitConfig(
             publicApiKey = publicApiKey,
             httpClient = httpClient,
-            installationIdStorage = installationIdStorage,
+            installationIdStorage = installationIdStorage ?: defaultInstallationIdStorage(),
             purchaseAdapters = purchaseAdapters.toList(),
             hostedMigrationAdapters = hostedMigrationAdapters.toList(),
         )

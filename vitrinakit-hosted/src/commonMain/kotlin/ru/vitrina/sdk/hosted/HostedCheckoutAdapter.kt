@@ -142,9 +142,12 @@ class HostedCheckoutAdapter(
             }
             configuration.resumeStateStore.clear()
             if (profile.grantsAccessFor(request = request)) {
-                return VitrinaKitPurchaseResult.Success(purchaseReference = checkout.id, profile = profile)
+                return VitrinaKitPurchaseResult.Success(
+                    purchaseReference = checkout.purchaseAttemptReference,
+                    profile = profile,
+                )
             }
-            endAbandonedCheckout(request = request, attemptReference = checkout.id)
+            endAbandonedCheckout(request = request, attemptReference = checkout.purchaseAttemptReference)
             return VitrinaKitPurchaseResult.Cancelled
         }
         var lastProfile: VitrinaKitProfile? = null
@@ -156,7 +159,10 @@ class HostedCheckoutAdapter(
             lastProfile = profile
             if (profile.grantsAccessFor(request = request)) {
                 configuration.resumeStateStore.clear()
-                return VitrinaKitPurchaseResult.Success(purchaseReference = checkout.id, profile = profile)
+                return VitrinaKitPurchaseResult.Success(
+                    purchaseReference = checkout.purchaseAttemptReference,
+                    profile = profile,
+                )
             }
             if (attemptIndex < configuration.pollingPolicy.maxRefreshAttempts - 1) {
                 configuration.pollingDelay.wait(configuration.pollingPolicy.intervalMilliseconds)
@@ -167,7 +173,7 @@ class HostedCheckoutAdapter(
         // flight — and ending the attempt on "unknown" would take the purchase away from a
         // buyer who is still making it. Only a deterministic dismissal cancels.
         return VitrinaKitPurchaseResult.Pending(
-            attemptReference = checkout.id,
+            attemptReference = checkout.purchaseAttemptReference,
             profile = lastProfile,
         )
     }

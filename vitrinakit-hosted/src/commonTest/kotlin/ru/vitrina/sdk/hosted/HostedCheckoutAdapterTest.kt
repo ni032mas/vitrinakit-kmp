@@ -84,7 +84,7 @@ class HostedCheckoutAdapterTest {
         val result = VitrinaKit.purchase(product)
 
         val success = assertIs<VitrinaKitPurchaseResult.Success>(result)
-        assertEquals("checkout-1", success.purchaseReference)
+        assertEquals("attempt-1", success.purchaseReference)
         assertTrue(success.profile.hasAccess)
         assertEquals(listOf("https://pay.example/confirm"), launchedUrls)
         val checkout = http.requests.single { it.path == "/api/v1/checkout/sessions" }
@@ -239,7 +239,7 @@ class HostedCheckoutAdapterTest {
         )
 
         val pending = assertIs<VitrinaKitPurchaseResult.Pending>(result)
-        assertEquals("checkout-1", pending.attemptReference)
+        assertEquals("attempt-1", pending.attemptReference)
         assertFalse(pending.profile?.hasAccess ?: true)
         assertEquals(3, refreshCalls)
         assertEquals(listOf(250L, 250L), delays)
@@ -283,7 +283,7 @@ class HostedCheckoutAdapterTest {
 
         assertIs<VitrinaKitPurchaseResult.Cancelled>(result)
         assertEquals(1, cancel.calls)
-        assertEquals("checkout-1", cancel.lastReference)
+        assertEquals("attempt-1", cancel.lastReference)
     }
 
     @Test
@@ -873,6 +873,7 @@ private fun checkoutSession(
     reused: Boolean = false,
 ): CheckoutSession = CheckoutSession(
     id = "checkout-1",
+    purchaseAttemptReference = "attempt-1",
     paymentId = "payment-1",
     providerPaymentId = "provider-payment-1",
     confirmationUrl = confirmationUrl,
@@ -965,4 +966,4 @@ private const val ActiveProfileJson =
 private const val PaywallJson =
     """{"placement_key":"main","products":[{"product_id":"product-1","product_key":"premium_monthly","product_name":"Premium","plan_id":"plan-1","plan_key":"premium","plan_name":"Premium","price_id":"price-1","amount_minor":9900,"currency":"RUB","interval_unit":"month","interval_count":1,"trial_interval_count":0,"highlighted":true,"sort_order":0,"entitlements":[{"key":"premium","name":"Premium"}]}]}"""
 private const val CheckoutJson =
-    """{"id":"checkout-1","payment_id":"payment-1","provider_payment_id":"provider-payment-1","confirmation_url":"https://pay.example/confirm","status":"pending","expires_at":"2026-08-06T12:00:00Z","reused":false}"""
+    """{"id":"checkout-1","purchase_attempt_reference":"attempt-1","payment_id":"payment-1","provider_payment_id":"provider-payment-1","confirmation_url":"https://pay.example/confirm","status":"pending","expires_at":"2026-08-06T12:00:00Z","reused":false}"""

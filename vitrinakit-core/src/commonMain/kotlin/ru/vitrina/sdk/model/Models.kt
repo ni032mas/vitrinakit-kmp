@@ -193,12 +193,21 @@ data class Paywall(
  * @property confirmationUrl URL that opens provider-hosted payment confirmation.
  * @property status Current checkout session status.
  * @property expiresAt Expiration timestamp in ISO-8601 UTC format.
+ * @property purchaseAttemptReference Purchase attempt this checkout belongs to.
  * @property reused Whether the session reused an existing open checkout.
  */
 @Serializable
 data class CheckoutSession(
     /** Checkout session identifier. */
     val id: String,
+    /**
+     * Purchase attempt this checkout belongs to.
+     *
+     * Every purchase-attempt route addresses the attempt, not the session, so this — never [id] —
+     * is what reads the attempt's status or ends it.
+     */
+    @SerialName("purchase_attempt_reference")
+    val purchaseAttemptReference: String,
     /** VitrinaKit payment identifier. */
     @SerialName("payment_id")
     val paymentId: String,

@@ -248,6 +248,28 @@ internal class VitrinaClient(
         return result
     }
 
+    /**
+     * Ends a hosted checkout the buyer walked away from.
+     *
+     * The server answers with the attempt's current view rather than a bare acknowledgement, so a
+     * cancellation that raced a real provider success reports that success instead of claiming the
+     * purchase was cancelled.
+     */
+    internal suspend fun cancelPurchase(
+        externalUserId: String?,
+        subscriberSession: String?,
+        attemptReference: String,
+        idempotencyKey: String,
+    ): PurchaseApiResult<PurchaseAttempt> = purchaseRequest(
+        method = VitrinaHttpMethod.POST,
+        path = "/api/v1/purchase-attempts/${encodePathSegment(attemptReference)}/cancel",
+        body = null,
+        headers = subscriberHeaders(subscriberId = externalUserId, sessionToken = subscriberSession) +
+            (IdempotencyHeader to idempotencyKey),
+        expectedStatus = HttpStatusOk,
+        decode = { payload -> json.decodeFromString<PurchaseAttemptResponse>(payload).toDomain() },
+    )
+
     internal suspend fun getPurchase(
         scope: SubscriberScope,
         attemptReference: String,

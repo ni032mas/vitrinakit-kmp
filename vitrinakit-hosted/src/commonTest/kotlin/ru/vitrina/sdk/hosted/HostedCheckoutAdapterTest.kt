@@ -25,6 +25,8 @@ import ru.vitrina.sdk.model.SubscriberEntitlementState
 import ru.vitrina.sdk.model.SubscriberState
 import ru.vitrina.sdk.model.SubscriptionStatus
 import ru.vitrina.sdk.model.BillingIntervalUnit
+import ru.vitrina.sdk.purchase.VitrinaKitHostedCancelOperation
+import ru.vitrina.sdk.purchase.VitrinaKitHostedCancellation
 import ru.vitrina.sdk.purchase.VitrinaKitHostedCheckoutOperation
 import ru.vitrina.sdk.purchase.VitrinaKitHostedProfileOperation
 import ru.vitrina.sdk.purchase.VitrinaKitHostedPurchaseRequest
@@ -266,6 +268,73 @@ class HostedCheckoutAdapterTest {
         assertIs<VitrinaKitPurchaseResult.Cancelled>(result)
         assertEquals(1, refreshCalls)
         assertEquals(null, store.state)
+    }
+
+    @Test
+    fun deterministicDismissalEndsTheAttemptOnTheServer() = runTest {
+        val cancel = RecordingCancelOperation()
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
+            ),
+        )
+
+        val result = adapter.purchase(hostedRequest(cancel = cancel))
+
+        assertIs<VitrinaKitPurchaseResult.Cancelled>(result)
+        assertEquals(1, cancel.calls)
+        assertEquals("checkout-1", cancel.lastReference)
+    }
+
+    @Test
+    fun grantedAccessAfterDismissalNeverCancelsTheAttempt() = runTest {
+        val cancel = RecordingCancelOperation()
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
+            ),
+        )
+
+        val result = adapter.purchase(hostedRequest(profile = { activeProfile() }, cancel = cancel))
+
+        assertIs<VitrinaKitPurchaseResult.Success>(result)
+        assertEquals(0, cancel.calls)
+    }
+
+    @Test
+    fun anUnknownOutcomeNeverCancelsTheAttempt() = runTest {
+        val cancel = RecordingCancelOperation()
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.TimedOut },
+            ),
+        )
+
+        val result = adapter.purchase(hostedRequest(cancel = cancel))
+
+        assertIs<VitrinaKitPurchaseResult.Pending>(result)
+        assertEquals(0, cancel.calls)
+    }
+
+    @Test
+    fun aFailedCancelNeverChangesTheDismissalOutcome() = runTest {
+        for (cancel in listOf(
+            RecordingCancelOperation(
+                outcome = VitrinaKitResult.Failure(VitrinaKitError.Network("Network request failed.")),
+            ),
+            RecordingCancelOperation(failure = IllegalStateException("transport exploded")),
+        )) {
+            val adapter = HostedCheckoutAdapter(
+                hostedConfiguration(
+                    launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
+                ),
+            )
+
+            val result = adapter.purchase(hostedRequest(cancel = cancel))
+
+            assertIs<VitrinaKitPurchaseResult.Cancelled>(result)
+            assertEquals(1, cancel.calls)
+        }
     }
 
     @Test
@@ -763,10 +832,12 @@ private fun hostedConfiguration(
 private fun hostedRequest(
     checkout: suspend () -> CheckoutSession = { checkoutSession() },
     profile: suspend () -> SubscriberState = { inactiveProfile() },
+    cancel: RecordingCancelOperation = RecordingCancelOperation(),
 ): VitrinaKitHostedPurchaseRequest = VitrinaKitHostedPurchaseRequest(
     product = hostedProduct(),
     checkout = VitrinaKitHostedCheckoutOperation { _, _ -> VitrinaKitResult.Success(checkout()) },
     profile = VitrinaKitHostedProfileOperation { VitrinaKitResult.Success(profile()) },
+    cancel = cancel,
 )
 
 private fun hostedRequestWithCheckoutFailure(
@@ -775,7 +846,27 @@ private fun hostedRequestWithCheckoutFailure(
     product = hostedProduct(),
     checkout = VitrinaKitHostedCheckoutOperation { _, _ -> VitrinaKitResult.Failure(error) },
     profile = VitrinaKitHostedProfileOperation { VitrinaKitResult.Success(inactiveProfile()) },
+    cancel = RecordingCancelOperation(),
 )
+
+/** Records what the adapter asked the server to cancel, and answers what the test configures. */
+private class RecordingCancelOperation(
+    private val outcome: VitrinaKitResult<VitrinaKitHostedCancellation> =
+        VitrinaKitResult.Success(VitrinaKitHostedCancellation(cancelled = true, reason = "card_declined")),
+    private val failure: Throwable? = null,
+) : VitrinaKitHostedCancelOperation {
+    var calls: Int = 0
+        private set
+    var lastReference: String? = null
+        private set
+
+    override suspend fun cancel(attemptReference: String): VitrinaKitResult<VitrinaKitHostedCancellation> {
+        calls += 1
+        lastReference = attemptReference
+        failure?.let { throw it }
+        return outcome
+    }
+}
 
 private fun checkoutSession(
     confirmationUrl: String = "https://pay.example/confirm",

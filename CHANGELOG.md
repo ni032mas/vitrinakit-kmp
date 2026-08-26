@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.1.0-rc.14
+
+### Added
+
+- Hosted checkout now ends the purchase attempt on the server when the buyer
+  deterministically closes the payment page. Until now the attempt stayed open
+  until it expired, which held the buyer's next purchase hostage and left the app
+  with no stable server code to localize — it could only report a cancellation it
+  had decided locally. The adapter calls the new
+  `POST /api/v1/purchase-attempts/{reference}/cancel` through a core-owned
+  operation, so it never sees a transport credential.
+
+  The cancellation is only ever reported as one when the server confirms it. An
+  exhausted poll loop deliberately does **not** cancel: that outcome is unknown —
+  the browser may still be open, a resumed checkout may still be in flight — and
+  taking the purchase away from a buyer who is still making it is worse than
+  waiting. A failed cancel call leaves the existing result untouched.
+
+  `VitrinaKitHostedPurchaseRequest` carries a new `cancel` operation. This is a
+  source change for anyone constructing that type directly, which is opt-in
+  `@VitrinaKitPurchaseAdapterApi` surface; the public sealed result types are
+  unchanged.
+
 ## 0.1.0-rc.13
 
 ### Fixed

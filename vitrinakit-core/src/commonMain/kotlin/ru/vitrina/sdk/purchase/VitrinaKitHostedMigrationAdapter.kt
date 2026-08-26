@@ -28,22 +28,51 @@ fun interface VitrinaKitHostedProfileOperation {
 }
 
 /**
+ * Outcome of ending a hosted checkout from the client's side.
+ *
+ * @property cancelled True only when the server confirmed the attempt reached a terminal
+ * cancellation. An attempt the server still considers open reports false, so the adapter never
+ * reports a cancellation that did not happen.
+ * @property reason Stable server code describing why the attempt ended, when the server recorded
+ * one. Never provider vocabulary and never free text.
+ */
+@VitrinaKitPurchaseAdapterApi
+data class VitrinaKitHostedCancellation(
+    val cancelled: Boolean,
+    val reason: String?,
+)
+
+/**
+ * Core-owned cancellation for a hosted checkout the buyer abandoned.
+ *
+ * Ending the attempt is what frees the subscriber to start another purchase instead of waiting for
+ * the abandoned one to expire. The provider payment itself is the server's business.
+ */
+@VitrinaKitPurchaseAdapterApi
+fun interface VitrinaKitHostedCancelOperation {
+    /** Ends the identified attempt and reports the state the server confirmed. */
+    suspend fun cancel(attemptReference: String): VitrinaKitResult<VitrinaKitHostedCancellation>
+}
+
+/**
  * Hosted purchase request whose network operations remain owned by the SDK core.
  *
  * @property product Product selected from the current subscriber's VitrinaKit paywall.
  * @property checkout Bound checkout creation operation that does not expose transport credentials.
  * @property profile Bound authoritative profile refresh operation.
+ * @property cancel Bound cancellation operation for an abandoned checkout.
  */
 @VitrinaKitPurchaseAdapterApi
 data class VitrinaKitHostedPurchaseRequest(
     val product: VitrinaKitPaywallProduct,
     val checkout: VitrinaKitHostedCheckoutOperation,
     val profile: VitrinaKitHostedProfileOperation,
+    val cancel: VitrinaKitHostedCancelOperation,
 ) {
     /** Returns safe metadata while redacting core-owned operations. */
     override fun toString(): String =
         "VitrinaKitHostedPurchaseRequest(productKey=${product.productKey}, " +
-            "checkout=<redacted>, profile=<redacted>)"
+            "checkout=<redacted>, profile=<redacted>, cancel=<redacted>)"
 }
 
 /**

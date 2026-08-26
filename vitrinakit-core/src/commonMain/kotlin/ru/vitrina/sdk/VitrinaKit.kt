@@ -41,6 +41,8 @@ import ru.vitrina.sdk.purchase.PurchaseCoordinator
 import ru.vitrina.sdk.purchase.IdentityLifecycleInvalidatedException
 import ru.vitrina.sdk.purchase.IdentityOperationLease
 import ru.vitrina.sdk.purchase.SubscriberScope
+import ru.vitrina.sdk.purchase.PurchaseApiResult
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAttemptStatus
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapter
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapterApi
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseError
@@ -52,6 +54,8 @@ import ru.vitrina.sdk.purchase.VitrinaKitHostedMigrationAdapter
 import ru.vitrina.sdk.purchase.VitrinaKitHostedMigrationRequest
 import ru.vitrina.sdk.purchase.VitrinaKitHostedProfileOperation
 import ru.vitrina.sdk.purchase.VitrinaKitHostedPurchaseAdapter
+import ru.vitrina.sdk.purchase.VitrinaKitHostedCancelOperation
+import ru.vitrina.sdk.purchase.VitrinaKitHostedCancellation
 import ru.vitrina.sdk.purchase.VitrinaKitHostedPurchaseRequest
 import ru.vitrina.sdk.purchase.VitrinaKitHostedRestoreRequest
 
@@ -636,6 +640,11 @@ object VitrinaKit {
                 identityLease = identityLease,
                 onRefresh = { profile -> refreshedProfile.value = profile },
             ),
+            cancel = hostedCancelOperation(
+                active = active,
+                bound = bound,
+                identityLease = identityLease,
+            ),
         )
         val result = runCatching {
             identityLease.run { adapter.purchase(request = request) }
@@ -793,6 +802,49 @@ object VitrinaKit {
     }
 
     }
+    /**
+     * Binds cancellation to the identity that owns the attempt.
+     *
+     * A cancellation is only ever reported when the server confirmed it. Anything else — a network
+     * failure, a stale identity, an attempt the server still considers open — leaves the caller's
+     * own reading of the purchase untouched, because inventing a cancellation would tell the buyer
+     * their payment stopped when it may not have.
+     */
+    private fun hostedCancelOperation(
+        active: VitrinaKitRuntime,
+        bound: BoundIdentity,
+        identityLease: IdentityOperationLease,
+    ): VitrinaKitHostedCancelOperation = newCheckoutIdempotencyKey().let { cancelIdempotencyKey ->
+        VitrinaKitHostedCancelOperation { attemptReference ->
+            val result = runCatching {
+                identityLease.run {
+                    active.client.cancelPurchase(
+                        externalUserId = bound.hostedExternalUserId,
+                        subscriberSession = bound.sessionToken,
+                        attemptReference = attemptReference,
+                        idempotencyKey = cancelIdempotencyKey,
+                    )
+                }
+            }.getOrElse { throwable ->
+                if (throwable is CancellationException) throw throwable
+                return@VitrinaKitHostedCancelOperation VitrinaKitResult.Failure(
+                    VitrinaKitError.Network("Network request failed."),
+                )
+            }
+            when (result) {
+                is PurchaseApiResult.Success -> VitrinaKitResult.Success(
+                    VitrinaKitHostedCancellation(
+                        cancelled = result.value.status == VitrinaKitPurchaseAttemptStatus.CANCELLED,
+                        reason = result.value.reason,
+                    ),
+                )
+                is PurchaseApiResult.Failure -> VitrinaKitResult.Failure(
+                    VitrinaKitError.Provider("Hosted checkout cancellation failed."),
+                )
+            }
+        }
+    }
+
     private fun hostedProfileOperation(
         current: VitrinaKitLifecycleState,
         active: VitrinaKitRuntime,

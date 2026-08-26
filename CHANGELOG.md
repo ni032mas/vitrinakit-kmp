@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.1.0-rc.15
+
+### Fixed
+
+- Hosted checkout now addresses the purchase attempt rather than the checkout
+  session. `CheckoutSession` carries the new `purchase_attempt_reference` field
+  Vitrina returns, and the adapter uses it for cancellation and for the
+  references it reports on `Pending` and `Success`.
+
+  Until now those references were session ids. That was invisible while nothing
+  looked them up, and became a real failure the moment rc.14 tried to cancel:
+  the server answered 404 for an id that named a checkout session, and the
+  attempt the buyer had abandoned stayed open. Found by running the release
+  payment matrix against production, not by reading the code.
+
+  Requires a Vitrina backend that returns `purchase_attempt_reference`.
+
 ## 0.1.0-rc.14
 
 ### Added

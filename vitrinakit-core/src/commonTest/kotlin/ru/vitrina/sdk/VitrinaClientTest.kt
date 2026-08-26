@@ -2027,6 +2027,7 @@ class VitrinaClientTest {
         val payload = """
             {
               "id": "session-1",
+              "purchase_attempt_reference": "attempt-1",
               "payment_id": "payment-1",
               "provider_payment_id": "pay_1",
               "confirmation_url": "https://pay.example/confirm",
@@ -2039,6 +2040,7 @@ class VitrinaClientTest {
         val session = json.decodeFromString<CheckoutSession>(payload)
 
         assertEquals("session-1", session.id)
+        assertEquals("attempt-1", session.purchaseAttemptReference)
         assertEquals("payment-1", session.paymentId)
         assertEquals("pay_1", session.providerPaymentId)
         assertEquals("https://pay.example/confirm", session.confirmationUrl)
@@ -2532,6 +2534,7 @@ private val checkoutJson = json.encodeToString(
 
 private fun hostedPurchase(): CheckoutSession = CheckoutSession(
     id = "session-1",
+    purchaseAttemptReference = "attempt-1",
     paymentId = "payment-1",
     providerPaymentId = "pay_1",
     confirmationUrl = "https://pay.example/confirm",

@@ -43,7 +43,6 @@ class GooglePlayPurchaseAdapterTest {
                 activityLookupThreads.trySend(Thread.currentThread().name)
                 BillingActivityHandle(ActivityMarker)
             },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateway },
             launchDispatcher = mainDispatcher,
         )
@@ -78,7 +77,6 @@ class GooglePlayPurchaseAdapterTest {
         val adapter = GooglePlayPurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { BillingActivityHandle(ActivityMarker) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateway },
             launchDispatcher = launchDispatcher,
         )
@@ -569,7 +567,6 @@ class GooglePlayPurchaseAdapterTest {
         val adapter = GooglePlayPurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { BillingActivityHandle(ActivityMarker) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateway },
             foregroundQueryIntervalMillis = 5_000L,
             clockMillis = { nowMillis },
@@ -650,7 +647,7 @@ class GooglePlayPurchaseAdapterTest {
     }
 
     @Test
-    fun restoreUsesExplicitResolverAndSkipsUnmappedProducts() = runTest {
+    fun restoreReturnsEveryPurchaseWithItsOwnProviderProductId() = runTest {
         val gateway = FakeBillingGateway(products = listOf(baseProduct()))
         gateway.purchases = listOf(
             purchasedPurchase(TOKEN_ONE, PRODUCT_ID),
@@ -660,9 +657,28 @@ class GooglePlayPurchaseAdapterTest {
 
         val restored = adapter.queryRestorablePurchases()
 
+        assertEquals(2, restored.size)
+        val byToken = restored.associateBy { purchase -> proofValue(purchase) }
+        assertEquals(PRODUCT_ID, byToken.getValue(TOKEN_ONE).providerProductId)
+        assertEquals("unmapped.product", byToken.getValue(TOKEN_TWO).providerProductId)
+    }
+
+    @Test
+    fun restoreOmitsProviderProductIdWhenPlayReportsMoreThanOne() = runTest {
+        val gateway = FakeBillingGateway(products = listOf(baseProduct()))
+        gateway.purchases = listOf(
+            BillingPurchase(
+                productIds = listOf(PRODUCT_ID, "bundled.product"),
+                purchaseToken = TOKEN_ONE,
+                state = BillingPurchaseState.PURCHASED,
+            ),
+        )
+        val adapter = adapter(gateway)
+
+        val restored = adapter.queryRestorablePurchases()
+
         assertEquals(1, restored.size)
-        assertEquals(PLACEMENT_ID, restored.single().placementId)
-        assertEquals(PRODUCT_REFERENCE, restored.single().productReference)
+        assertEquals(null, restored.single().providerProductId)
         assertEquals(TOKEN_ONE, proofValue(restored.single()))
     }
 
@@ -741,7 +757,6 @@ class GooglePlayPurchaseAdapterTest {
         val adapter = GooglePlayPurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { BillingActivityHandle(ActivityMarker) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateways.removeFirst() },
             launchDispatcher = Dispatchers.Unconfined,
         )
@@ -780,23 +795,10 @@ class GooglePlayPurchaseAdapterTest {
         GooglePlayPurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { BillingActivityHandle(ActivityMarker) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateway },
             emptyCallbackTimeoutMillis = 50L,
             launchDispatcher = Dispatchers.Unconfined,
         )
-
-    private fun resolver(): GooglePlayRestoreReferenceResolver =
-        GooglePlayRestoreReferenceResolver { productId ->
-            if (productId == PRODUCT_ID) {
-                GooglePlayRestoreResolution.Mapped(
-                    placementId = PLACEMENT_ID,
-                    productReference = PRODUCT_REFERENCE,
-                )
-            } else {
-                GooglePlayRestoreResolution.Skip
-            }
-        }
 
     private fun instruction(
         productId: String = PRODUCT_ID,
@@ -871,8 +873,6 @@ class GooglePlayPurchaseAdapterTest {
         const val BASE_PLAN_ID = "monthly"
         const val ACCOUNT_BINDING = "opaque-account-binding"
         const val ATTEMPT_REFERENCE = "attempt-reference"
-        const val PLACEMENT_ID = "main"
-        const val PRODUCT_REFERENCE = "premium-monthly"
         const val TOKEN_ONE = "purchase-token-one"
         const val TOKEN_TWO = "purchase-token-two"
     }

@@ -41,7 +41,6 @@ import ru.vitrina.sdk.purchase.VitrinaKitRestorablePurchase
 class RuStorePurchaseAdapter internal constructor(
     private val packageName: String,
     private val activityHandleProvider: () -> RuStoreActivityHandle?,
-    private val restoreReferenceResolver: RuStoreRestoreReferenceResolver,
     private val gatewayFactory: () -> RuStorePayGateway,
     private val launchDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val foregroundQueryIntervalMillis: Long = DefaultForegroundQueryIntervalMillis,
@@ -52,18 +51,15 @@ class RuStorePurchaseAdapter internal constructor(
      *
      * @param context Android context used only to bind instructions to this application package.
      * @param activityProvider Supplies a resumed activity only at presentation time.
-     * @param restoreReferenceResolver Explicitly maps RuStore product IDs for fresh-install restore.
      */
     constructor(
         context: Context,
         activityProvider: RuStoreActivityProvider,
-        restoreReferenceResolver: RuStoreRestoreReferenceResolver,
     ) : this(
         packageName = context.applicationContext.packageName,
         activityHandleProvider = {
             activityProvider.currentActivity()?.let(::RuStoreActivityHandle)
         },
-        restoreReferenceResolver = restoreReferenceResolver,
         gatewayFactory = ::RealRuStorePayGateway,
     )
 
@@ -184,7 +180,7 @@ class RuStorePurchaseAdapter internal constructor(
         }
     }
 
-    /** Queries provider purchases and applies only explicit restore catalog mappings. */
+    /** Queries every purchase visible to the current RuStore session for restore. */
     override suspend fun queryRestorablePurchases(): List<VitrinaKitRestorablePurchase> {
         val purchases = try {
             resources().getPurchases()
@@ -199,15 +195,7 @@ class RuStorePurchaseAdapter internal constructor(
         return deduplicateQueried(
             purchases = purchases,
             includeStates = setOf(RuStorePurchaseState.PURCHASED),
-        ).mapNotNull { purchase ->
-            when (val resolution = restoreReferenceResolver.resolve(purchase.productId)) {
-                is RuStoreRestoreResolution.Mapped -> purchase.toRestorablePurchase(
-                    mapping = resolution,
-                    proof = proofFor(purchase),
-                )
-                RuStoreRestoreResolution.Skip -> null
-            }
-        }
+        ).map { purchase -> purchase.toRestorablePurchase(proof = proofFor(purchase)) }
     }
 
     /** Queries RuStore for an interrupted attempt without presenting payment UI. */

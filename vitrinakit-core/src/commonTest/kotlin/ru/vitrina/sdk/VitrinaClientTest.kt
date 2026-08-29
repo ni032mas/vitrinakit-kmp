@@ -211,8 +211,7 @@ class VitrinaClientTest {
             },
             restorablePurchases = listOf(
                 VitrinaKitRestorablePurchase(
-                    placementId = "main",
-                    productReference = "premium_monthly",
+                    providerProductId = "premium.subscription",
                     proof = VitrinaKitProviderProof("store-proof"),
                 ),
             ),
@@ -1217,8 +1216,7 @@ class VitrinaClientTest {
             scope = scope,
             purchases = listOf(
                 VitrinaKitRestorablePurchase(
-                    placementId = "main",
-                    productReference = "premium_monthly",
+                    providerProductId = "premium.subscription",
                     proof = VitrinaKitProviderProof("restore-proof-secret"),
                 ),
             ),
@@ -1231,11 +1229,40 @@ class VitrinaClientTest {
         val restoreItem = Json.parseToJsonElement(restoreRequest.body.orEmpty())
             .jsonObject.getValue("purchases")
             .jsonArray.single().jsonObject
-        assertEquals("main", restoreItem.getValue("placement_key").jsonPrimitive.content)
-        assertEquals("premium_monthly", restoreItem.getValue("product_reference").jsonPrimitive.content)
+        assertEquals(
+            "premium.subscription",
+            restoreItem.getValue("provider_product_id").jsonPrimitive.content,
+        )
         assertEquals("google_play", restoreItem.getValue("capability").jsonPrimitive.content)
         assertEquals("restore-proof-secret", restoreItem.getValue("proof").jsonPrimitive.content)
         assertFalse(restoreRequest.toString().contains("restore-proof-secret"))
+        assertFalse(restoreItem.containsKey("placement_key"))
+        assertFalse(restoreItem.containsKey("product_reference"))
+    }
+
+    @Test
+    fun restoreOmitsProviderProductIdWhenTheAdapterDoesNotSupplyOne() = runTest {
+        val scope = SubscriberScope(
+            cacheKey = SubscriberCacheKey("production", "app-1", "subscriber-1"),
+            sessionToken = "opaque-session",
+        )
+        val restoreHttp = QueueHttpClient(VitrinaHttpResponse(HttpStatusOk, restoreSuccessJson))
+
+        newClient(http = restoreHttp).restorePurchases(
+            scope = scope,
+            purchases = listOf(
+                VitrinaKitRestorablePurchase(
+                    providerProductId = null,
+                    proof = VitrinaKitProviderProof("restore-proof-secret"),
+                ),
+            ),
+            capability = VitrinaKitPurchaseCapability.GOOGLE_PLAY,
+        )
+
+        val restoreItem = Json.parseToJsonElement(restoreHttp.requests.single().body.orEmpty())
+            .jsonObject.getValue("purchases")
+            .jsonArray.single().jsonObject
+        assertFalse(restoreItem.containsKey("provider_product_id"))
     }
 
     @Test

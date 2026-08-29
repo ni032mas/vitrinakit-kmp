@@ -299,9 +299,8 @@ internal class VitrinaClient(
             RestorePurchaseRequest(
                 purchases = purchases.map { purchase ->
                     RestorePurchaseProofRequest(
-                        placementId = purchase.placementId,
-                        productReference = purchase.productReference,
                         capability = capability,
+                        providerProductId = purchase.providerProductId,
                         proof = purchase.proof.value,
                     )
                 },
@@ -820,16 +819,14 @@ private data class RestorePurchaseRequest(val purchases: List<RestorePurchasePro
 
 @Serializable
 private data class RestorePurchaseProofRequest(
-    @SerialName("placement_key")
-    val placementId: String,
-    @SerialName("product_reference")
-    val productReference: String,
     val capability: VitrinaKitPurchaseCapability,
+    @SerialName("provider_product_id")
+    val providerProductId: String? = null,
     val proof: String,
 ) {
     override fun toString(): String =
-        "RestorePurchaseProofRequest(placementId=$placementId, productReference=$productReference, " +
-            "capability=$capability, proof=<redacted>)"
+        "RestorePurchaseProofRequest(capability=$capability, providerProductId=$providerProductId, " +
+            "proof=<redacted>)"
 }
 
 @Serializable

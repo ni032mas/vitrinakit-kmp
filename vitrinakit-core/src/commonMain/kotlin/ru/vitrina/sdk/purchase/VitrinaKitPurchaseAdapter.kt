@@ -179,17 +179,20 @@ sealed interface VitrinaKitAdapterPurchaseResult {
 /**
  * Provider purchase eligible for restore.
  *
- * @property placementId Placement used to resolve the published offering.
- * @property productReference Stable product key or identifier returned by a paywall.
+ * The server resolves the placement and catalog product from this purchase; the adapter never
+ * declares a catalog mapping.
+ *
+ * @property providerProductId Store's own product identifier read off this purchase. Optional
+ * where the proof is self-describing to the server (Google Play); required where the provider
+ * API cannot be queried without it (RuStore).
  * @property proof Provider proof submitted directly to VitrinaKit.
  */
 @VitrinaKitPurchaseAdapterApi
 data class VitrinaKitRestorablePurchase(
-    val placementId: String,
-    val productReference: String,
+    val providerProductId: String?,
     val proof: VitrinaKitProviderProof,
 ) {
     /** Returns restore metadata while always redacting provider proof. */
     override fun toString(): String =
-        "VitrinaKitRestorablePurchase(placementId=$placementId, productReference=$productReference, proof=<redacted>)"
+        "VitrinaKitRestorablePurchase(providerProductId=$providerProductId, proof=<redacted>)"
 }

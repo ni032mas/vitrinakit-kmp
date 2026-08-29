@@ -49,7 +49,6 @@ class RuStorePurchaseAdapterTest {
                 lookupThreads.trySend(Thread.currentThread().name)
                 RuStoreActivityHandle(ActivityMarker)
             },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateway },
             launchDispatcher = mainDispatcher,
         )
@@ -89,7 +88,6 @@ class RuStorePurchaseAdapterTest {
         val adapter = RuStorePurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { RuStoreActivityHandle(activity) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateway },
             launchDispatcher = dispatcher,
         )
@@ -302,7 +300,6 @@ class RuStorePurchaseAdapterTest {
         val adapter = RuStorePurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { RuStoreActivityHandle(ActivityMarker) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = {
                 gatewayCreations += 1
                 gateway
@@ -360,7 +357,6 @@ class RuStorePurchaseAdapterTest {
         val adapter = RuStorePurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { RuStoreActivityHandle(ActivityMarker) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateway },
             launchDispatcher = dispatcher,
         )
@@ -379,7 +375,7 @@ class RuStorePurchaseAdapterTest {
     }
 
     @Test
-    fun restoreUsesExplicitMappedOrSkipPolicyAndRetriesUntilAcceptance() = runTest {
+    fun restoreReturnsEveryPurchaseWithItsOwnProviderProductId() = runTest {
         val gateway = FakeRuStorePayGateway(products = listOf(RuStoreProduct(PRODUCT_ID)))
         gateway.purchases = listOf(
             RuStorePurchase(PURCHASE_ONE, PRODUCT_ID, RuStorePurchaseState.PURCHASED),
@@ -387,12 +383,25 @@ class RuStorePurchaseAdapterTest {
         )
         val adapter = adapter(gateway)
 
+        val restored = adapter.queryRestorablePurchases()
+
+        assertEquals(2, restored.size)
+        val byToken = restored.associateBy { purchase -> proofValue(purchase.proof) }
+        assertEquals(PRODUCT_ID, byToken.getValue(PURCHASE_ONE).providerProductId)
+        assertEquals("unmapped.product", byToken.getValue(PURCHASE_TWO).providerProductId)
+    }
+
+    @Test
+    fun restoreRetriesUntilServerAcceptanceThenSuppressesOnlyThatPurchase() = runTest {
+        val gateway = FakeRuStorePayGateway(products = listOf(RuStoreProduct(PRODUCT_ID)))
+        gateway.purchases = listOf(RuStorePurchase(PURCHASE_ONE, PRODUCT_ID, RuStorePurchaseState.PURCHASED))
+        val adapter = adapter(gateway)
+
         val first = adapter.queryRestorablePurchases().single()
         val retry = adapter.queryRestorablePurchases().single()
         adapter.onProofAccepted(first.proof)
 
-        assertEquals(PLACEMENT_ID, first.placementId)
-        assertEquals(PRODUCT_REFERENCE, first.productReference)
+        assertEquals(PRODUCT_ID, first.providerProductId)
         assertEquals(PURCHASE_ONE, proofValue(first.proof))
         assertEquals(PURCHASE_ONE, proofValue(retry.proof))
         assertTrue(adapter.queryRestorablePurchases().isEmpty())
@@ -407,7 +416,6 @@ class RuStorePurchaseAdapterTest {
         val adapter = RuStorePurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { RuStoreActivityHandle(ActivityMarker) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = { gateways.removeFirst() },
             launchDispatcher = Dispatchers.Unconfined,
         )
@@ -525,7 +533,6 @@ class RuStorePurchaseAdapterTest {
         val adapter = RuStorePurchaseAdapter(
             packageName = PACKAGE_NAME,
             activityHandleProvider = { RuStoreActivityHandle(ActivityMarker) },
-            restoreReferenceResolver = resolver(),
             gatewayFactory = {
                 creations += 1
                 throw IllegalStateException("provider-detail")
@@ -703,24 +710,11 @@ class RuStorePurchaseAdapterTest {
     ): RuStorePurchaseAdapter = RuStorePurchaseAdapter(
         packageName = PACKAGE_NAME,
         activityHandleProvider = { RuStoreActivityHandle(ActivityMarker) },
-        restoreReferenceResolver = resolver(),
         gatewayFactory = { gateway },
         launchDispatcher = Dispatchers.Unconfined,
         foregroundQueryIntervalMillis = foregroundQueryIntervalMillis,
         clockMillis = clockMillis,
     )
-
-    private fun resolver(): RuStoreRestoreReferenceResolver =
-        RuStoreRestoreReferenceResolver { productId ->
-            if (productId == PRODUCT_ID) {
-                RuStoreRestoreResolution.Mapped(
-                    placementId = PLACEMENT_ID,
-                    productReference = PRODUCT_REFERENCE,
-                )
-            } else {
-                RuStoreRestoreResolution.Skip
-            }
-        }
 
     private fun instruction(
         productId: String = PRODUCT_ID,
@@ -758,8 +752,6 @@ class RuStorePurchaseAdapterTest {
         const val PRODUCT_ID = "premium.subscription"
         const val ACCOUNT_BINDING = "opaque-account-binding"
         const val ATTEMPT_REFERENCE = "attempt-reference"
-        const val PLACEMENT_ID = "main"
-        const val PRODUCT_REFERENCE = "premium-monthly"
         const val PURCHASE_ONE = "rustore-purchase-one"
         const val PURCHASE_TWO = "rustore-purchase-two"
     }

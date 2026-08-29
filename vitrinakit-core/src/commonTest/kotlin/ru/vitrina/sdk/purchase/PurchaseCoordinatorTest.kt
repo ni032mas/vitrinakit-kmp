@@ -494,8 +494,7 @@ class PurchaseCoordinatorTest {
         val adapter = FakePurchaseAdapter(
             restoreResult = listOf(
                 VitrinaKitRestorablePurchase(
-                    placementId = "main",
-                    productReference = "premium_monthly",
+                    providerProductId = "premium.subscription",
                     proof = VitrinaKitProviderProof("restore-proof"),
                 ),
             ),
@@ -562,8 +561,8 @@ class PurchaseCoordinatorTest {
         val secondProof = VitrinaKitProviderProof("second")
         val adapter = FakePurchaseAdapter(
             restoreResult = listOf(
-                VitrinaKitRestorablePurchase("main", "one", firstProof),
-                VitrinaKitRestorablePurchase("main", "two", secondProof),
+                VitrinaKitRestorablePurchase("one", firstProof),
+                VitrinaKitRestorablePurchase("two", secondProof),
             ),
         )
 

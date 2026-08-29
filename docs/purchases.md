@@ -47,27 +47,23 @@ Use `vitrinakit-googleplay`. RC 0.1.0-rc.7 integrates Google Play Billing
 Library 9.1.0 and requires Android API 23 or newer.
 
 Construct the adapter in the Android composition root. Supply a resumed
-`Activity` only at launch time and explicitly map store product IDs to public
-catalog references for fresh-install restore:
+`Activity` only at launch time:
 
 ```kotlin
 val adapter = GooglePlayPurchaseAdapter(
     context = applicationContext,
     activityProvider = GooglePlayActivityProvider { resumedActivityOrNull() },
-    restoreReferenceResolver = GooglePlayRestoreReferenceResolver { productId ->
-        restoreCatalog[productId]?.let { item ->
-            GooglePlayRestoreResolution.Mapped(
-                placementId = item.placementId,
-                productReference = item.productReference,
-            )
-        } ?: GooglePlayRestoreResolution.Skip
-    },
 )
 
 val config = VitrinaKitConfig.Builder("PUBLIC_API_KEY")
     .withPurchaseAdapter(adapter)
     .build()
 ```
+
+Restore composition is server-side: the adapter reports every purchase visible
+to the current Play account, and the server resolves the placement and catalog
+product from the purchase it already knows or from the store's own product ID.
+The application does not declare a restore catalog mapping.
 
 Configure subscriptions, base plans, offers, package name, and account policy in
 Google Play Console and VitrinaKit before sandbox testing. The adapter resolves
@@ -151,20 +147,17 @@ the official BOM 2026.07.01 and requires Android API 23 or newer.
 val adapter = RuStorePurchaseAdapter(
     context = applicationContext,
     activityProvider = RuStoreActivityProvider { resumedActivityOrNull() },
-    restoreReferenceResolver = RuStoreRestoreReferenceResolver { productId ->
-        restoreCatalog[productId]?.let { item ->
-            RuStoreRestoreResolution.Mapped(
-                placementId = item.placementId,
-                productReference = item.productReference,
-            )
-        } ?: RuStoreRestoreResolution.Skip
-    },
 )
 
 val config = VitrinaKitConfig.Builder("PUBLIC_API_KEY")
     .withPurchaseAdapter(adapter)
     .build()
 ```
+
+Restore composition is server-side: the adapter reports every purchase visible
+to the current RuStore session together with its subscription ID, which RuStore
+requires to resolve the purchase. The server resolves the placement and catalog
+product from it; the application does not declare a restore catalog mapping.
 
 Configure the official Pay SDK manifest metadata resources
 `console_app_id_value` and `sdk_pay_scheme_value`, a matching deep-link intent

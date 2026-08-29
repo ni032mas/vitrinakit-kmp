@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Changed
+
+- Restore composition is now server-side. `POST /api/v1/purchases/restore`
+  no longer accepts `placement_key` or `product_reference` per purchase; the
+  server resolves the placement and catalog product itself, from the purchase
+  it already knows by proof fingerprint or from the store's own product ID.
+  Sending either field is rejected with `400`.
+
+  `VitrinaKitRestorablePurchase` drops `placementId` and `productReference`
+  and gains `providerProductId`, the store's own product identifier read off
+  the purchase. It is optional for Google Play, whose purchase token is
+  self-describing to the server, and required for RuStore, whose API cannot
+  be queried without the subscription ID. `GooglePlayPurchaseAdapter` and
+  `RuStorePurchaseAdapter` no longer take a `restoreReferenceResolver`
+  constructor parameter — the application no longer declares a restore
+  catalog mapping, and `queryRestorablePurchases()` on both adapters now
+  reports every purchase visible to the current store account instead of
+  filtering by that mapping, because the server discards products the
+  application does not sell.
+
+  This is a breaking change to `0.1.0-rc.*` and has no compatibility shim:
+  the old request fields are rejected outright, so a resolver-based
+  integration must remove the constructor argument and the resolver types it
+  referenced.
+
 ## 0.1.0-rc.15
 
 ### Fixed

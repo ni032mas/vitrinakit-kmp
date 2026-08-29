@@ -35,7 +35,6 @@ import ru.vitrina.sdk.purchase.VitrinaKitRestorablePurchase
 class GooglePlayPurchaseAdapter internal constructor(
     private val packageName: String,
     private val activityHandleProvider: () -> BillingActivityHandle?,
-    private val restoreReferenceResolver: GooglePlayRestoreReferenceResolver,
     private val gatewayFactory: () -> GooglePlayBillingGateway,
     private val emptyCallbackTimeoutMillis: Long = DefaultEmptyCallbackTimeoutMillis,
     private val launchDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
@@ -47,18 +46,15 @@ class GooglePlayPurchaseAdapter internal constructor(
      *
      * @param context Android context used only through its application context.
      * @param activityProvider Supplies a resumed activity only at launch time.
-     * @param restoreReferenceResolver Explicitly maps Play product IDs for fresh-install restore.
      */
     constructor(
         context: Context,
         activityProvider: GooglePlayActivityProvider,
-        restoreReferenceResolver: GooglePlayRestoreReferenceResolver,
     ) : this(
         packageName = context.applicationContext.packageName,
         activityHandleProvider = {
             activityProvider.currentActivity()?.let(::BillingActivityHandle)
         },
-        restoreReferenceResolver = restoreReferenceResolver,
         gatewayFactory = { RealGooglePlayBillingGateway(context = context.applicationContext) },
     )
 
@@ -149,7 +145,7 @@ class GooglePlayPurchaseAdapter internal constructor(
         }
     }
 
-    /** Queries purchased subscriptions and applies the explicit restore reference resolver. */
+    /** Queries every purchased subscription visible to the current Play account for restore. */
     override suspend fun queryRestorablePurchases(): List<VitrinaKitRestorablePurchase> {
         val query = resources().connection.queryPurchases()
         if (query.responseCode != BillingResponseCode.OK) {
@@ -164,16 +160,7 @@ class GooglePlayPurchaseAdapter internal constructor(
             queried = query.values,
             includeStates = setOf(BillingPurchaseState.PURCHASED),
         )
-        return purchases.mapNotNull { purchase ->
-            val productId = purchase.productIds.singleOrNull() ?: return@mapNotNull null
-            when (val resolution = restoreReferenceResolver.resolve(productId)) {
-                is GooglePlayRestoreResolution.Mapped -> purchase.toRestorablePurchase(
-                    mapping = resolution,
-                    proof = proofFor(purchase),
-                )
-                GooglePlayRestoreResolution.Skip -> null
-            }
-        }
+        return purchases.map { purchase -> purchase.toRestorablePurchase(proof = proofFor(purchase)) }
     }
 
     /** Queries Play for an interrupted attempt without relaunching billing UI. */

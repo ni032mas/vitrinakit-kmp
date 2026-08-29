@@ -820,6 +820,10 @@ private data class RestorePurchaseRequest(val purchases: List<RestorePurchasePro
 @Serializable
 private data class RestorePurchaseProofRequest(
     val capability: VitrinaKitPurchaseCapability,
+    // The "= null" default is load-bearing, not decorative: encodeDefaults = false only omits
+    // a field when it matches a declared default, so this default is what lets a null
+    // providerProductId be dropped from the request body instead of sent as an explicit
+    // "provider_product_id": null, which the server's strict decoder would reject.
     @SerialName("provider_product_id")
     val providerProductId: String? = null,
     val proof: String,

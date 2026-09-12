@@ -31,11 +31,14 @@ import ru.vitrina.sdk.installation.rotateInstallationId
 import ru.vitrina.sdk.model.VitrinaKitError
 import ru.vitrina.sdk.model.VitrinaKitAccessResolution
 import ru.vitrina.sdk.model.VitrinaKitIdentifyResult
+import ru.vitrina.sdk.model.VitrinaKitPaymentMethodState
 import ru.vitrina.sdk.model.VitrinaKitPaywall
 import ru.vitrina.sdk.model.VitrinaKitPaywallProduct
 import ru.vitrina.sdk.model.VitrinaKitProfile
 import ru.vitrina.sdk.model.VitrinaKitPurchase
+import ru.vitrina.sdk.model.VitrinaKitRenewalState
 import ru.vitrina.sdk.model.VitrinaKitResult
+import ru.vitrina.sdk.model.VitrinaKitSubscription
 import ru.vitrina.sdk.model.VitrinaResult
 import ru.vitrina.sdk.purchase.PurchaseCoordinator
 import ru.vitrina.sdk.purchase.IdentityLifecycleInvalidatedException
@@ -399,6 +402,64 @@ object VitrinaKit {
         }
         return result
     }
+
+    /**
+     * Turns auto-renewal off for the identified subscriber and keeps access until the period ends.
+     *
+     * Every subscription VitrinaKit creates renews itself, so this is the subscriber's own
+     * deliberate opt-out and nothing else switches renewal off. The paid period is not cut short:
+     * the returned [VitrinaKitRenewalState] carries the moment access actually ends.
+     *
+     * The call is idempotent. Asking again after a confirmed cancellation succeeds and reports the
+     * same state, so a caller never has to remember whether it asked already.
+     *
+     * @return The subscription's renewal state, or a typed failure when the server rejected the call.
+     */
+    suspend fun cancelAutoRenew(): VitrinaKitResult<VitrinaKitRenewalState> = subscriptionOperation(
+        call = { client, bound ->
+            client.cancelSubscriptionRenewal(
+                externalUserId = bound.externalUserId,
+                subscriberSession = bound.sessionToken,
+                idempotencyKey = newIdempotencyKey(),
+            )
+        },
+        applyToSubscription = { state, subscription ->
+            subscription.copy(
+                autoRenewEnabled = state.autoRenewEnabled,
+                currentPeriodEnd = state.currentPeriodEnd,
+                nextChargeAt = subscription.nextChargeAt.takeIf { state.autoRenewEnabled },
+            )
+        },
+    )
+
+    /**
+     * Removes the payment method stored for the identified subscriber's renewal charges.
+     *
+     * Nothing can be charged again once the method is gone, so renewal stops with it. Access the
+     * subscriber already paid for is never revoked by this call.
+     *
+     * The call is idempotent. Asking again once nothing is stored succeeds and reports the same
+     * state rather than failing.
+     *
+     * @return The subscription's stored payment method state, or a typed failure when the server
+     * rejected the call.
+     */
+    suspend fun detachPaymentMethod(): VitrinaKitResult<VitrinaKitPaymentMethodState> = subscriptionOperation(
+        call = { client, bound ->
+            client.detachSubscriptionPaymentMethod(
+                externalUserId = bound.externalUserId,
+                subscriberSession = bound.sessionToken,
+                idempotencyKey = newIdempotencyKey(),
+            )
+        },
+        applyToSubscription = { state, subscription ->
+            subscription.copy(
+                autoRenewEnabled = state.autoRenewEnabled,
+                paymentMethod = state.paymentMethod,
+                nextChargeAt = subscription.nextChargeAt.takeIf { state.autoRenewEnabled },
+            )
+        },
+    )
 
     /**
      * Legacy identity-per-call paywall API.
@@ -770,7 +831,7 @@ object VitrinaKit {
         placementId: String,
         cacheGeneration: Long,
         identityLease: IdentityOperationLease,
-    ): VitrinaKitHostedCheckoutOperation = newCheckoutIdempotencyKey().let { checkoutIdempotencyKey ->
+    ): VitrinaKitHostedCheckoutOperation = newIdempotencyKey().let { checkoutIdempotencyKey ->
         VitrinaKitHostedCheckoutOperation { _, returnUrl ->
         val result = runCatching {
             identityLease.run {
@@ -814,7 +875,7 @@ object VitrinaKit {
         active: VitrinaKitRuntime,
         bound: BoundIdentity,
         identityLease: IdentityOperationLease,
-    ): VitrinaKitHostedCancelOperation = newCheckoutIdempotencyKey().let { cancelIdempotencyKey ->
+    ): VitrinaKitHostedCancelOperation = newIdempotencyKey().let { cancelIdempotencyKey ->
         VitrinaKitHostedCancelOperation { attemptReference ->
             val result = runCatching {
                 identityLease.run {
@@ -883,6 +944,45 @@ object VitrinaKit {
         result
     }
 
+    /**
+     * Runs one identity-bound subscription-management call and folds its outcome into the cache.
+     *
+     * The confirmed change is written back onto the cached profile so a later cached [getProfile]
+     * cannot keep reporting renewal as on right after the subscriber turned it off. Nothing is
+     * written when the subscriber identity moved on mid-call, and a cached profile without a
+     * subscription is left alone rather than invented.
+     */
+    private suspend fun <T> subscriptionOperation(
+        call: suspend (VitrinaClient, BoundIdentity) -> VitrinaResult<T>,
+        applyToSubscription: (T, VitrinaKitSubscription) -> VitrinaKitSubscription,
+    ): VitrinaKitResult<T> {
+        val current = lifecycleState.value
+        val active = current.runtime ?: return notActivated()
+        val bound = current.identity ?: return identityRequired()
+        val cacheGeneration = active.cache.generation
+        val result = lifecycleLease.runSideEffect {
+            if (!isSameIdentityLifecycle(current)) {
+                return@runSideEffect null
+            }
+            call(active.client, bound).toKitResult()
+        } ?: return staleIdentityTransition()
+        if (result is VitrinaKitResult.Success) {
+            if (!isSameIdentityLifecycle(current) || active.cache.generation != cacheGeneration) {
+                return staleIdentityTransition()
+            }
+            val cached = active.cache.profile(key = bound.cacheKey)
+            val subscription = cached?.subscription
+            if (cached != null && subscription != null) {
+                active.cache.replaceProfileIfCurrent(
+                    key = bound.cacheKey,
+                    profile = cached.copy(subscription = applyToSubscription(result.value, subscription)),
+                    generation = cacheGeneration,
+                )
+            }
+        }
+        return result
+    }
+
     private fun bindIdentityIfCurrent(
         runtime: VitrinaKitRuntime,
         expectedLifecycle: VitrinaKitLifecycleState,
@@ -924,7 +1024,7 @@ object VitrinaKit {
             )
         val cacheGeneration = active.cache.generation
         val identityLease = identityOperationLease(expected = current, bound = bound)
-        val checkoutIdempotencyKey = newCheckoutIdempotencyKey()
+        val checkoutIdempotencyKey = newIdempotencyKey()
         val checkout = VitrinaKitHostedCheckoutOperation { _, returnUrl ->
             val result = runCatching {
                 identityLease.run {
@@ -1457,11 +1557,11 @@ private fun ru.vitrina.sdk.model.VitrinaError.toKitError(): VitrinaKitError = wh
 
 private const val RequiredPurchaseAdapterCount = 1
 
-private fun newCheckoutIdempotencyKey(): String = buildString {
-    repeat(CheckoutIdempotencyKeyLength) {
-        append(Random.nextInt(from = 0, until = CheckoutIdempotencyHexRadix).toString(radix = CheckoutIdempotencyHexRadix))
+private fun newIdempotencyKey(): String = buildString {
+    repeat(IdempotencyKeyLength) {
+        append(Random.nextInt(from = 0, until = IdempotencyHexRadix).toString(radix = IdempotencyHexRadix))
     }
 }
 
-private const val CheckoutIdempotencyKeyLength = 32
-private const val CheckoutIdempotencyHexRadix = 16
+private const val IdempotencyKeyLength = 32
+private const val IdempotencyHexRadix = 16

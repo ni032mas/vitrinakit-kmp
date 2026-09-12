@@ -183,6 +183,58 @@ responsibilities. Follow the official
 [RuStore Pay Kotlin/Java setup guide](https://www.rustore.ru/help/en/sdk/pay/kotlin-java)
 for current console and manifest steps.
 
+## Subscription management
+
+The subscriber profile carries the renewal state of the subscription it belongs
+to. `subscription` is `null` for a subscriber who has never bought anything, and
+`paymentMethod` is `null` when nothing is stored to charge.
+
+```kotlin
+val profile = when (val result = VitrinaKit.getProfile(forceRefresh = true)) {
+    is VitrinaKitResult.Success -> result.value
+    is VitrinaKitResult.Failure -> return showProfileError(result.error)
+}
+
+profile.subscription?.let { subscription ->
+    renderPeriodEnd(subscription.currentPeriodEnd)
+    renderNextCharge(subscription.nextChargeAt)
+    renderRenewal(subscription.autoRenewEnabled)
+    subscription.paymentMethod?.let { method -> renderCard(method.brand, method.last4) }
+}
+```
+
+Auto-renewal is on for every subscription VitrinaKit creates. Nothing in the SDK
+opts a subscriber into renewal, and nothing turns it off except the subscriber's
+own deliberate action:
+
+```kotlin
+// Stops future charges. Access continues until the paid period ends.
+when (val result = VitrinaKit.cancelAutoRenew()) {
+    is VitrinaKitResult.Success -> showAccessUntil(result.value.currentPeriodEnd)
+    is VitrinaKitResult.Failure -> showRenewalError(result.error)
+}
+
+// Removes the stored card, so nothing can be charged again. Paid access is kept.
+when (val result = VitrinaKit.detachPaymentMethod()) {
+    is VitrinaKitResult.Success -> showNoStoredCard()
+    is VitrinaKitResult.Failure -> showRenewalError(result.error)
+}
+```
+
+Both calls are idempotent. Calling them again after the state is already reached
+succeeds and reports the same state, so a retry after a lost response is safe and
+a screen does not have to remember whether it asked already.
+
+A rejection arrives as a typed error, not as a transport failure:
+`VitrinaKitError.Subscription` when the server refused the change (no renewing
+subscription, nothing stored to detach), `VitrinaKitError.Auth` when the caller
+may not act for this subscriber, and `VitrinaKitError.Network` only when the
+request did not produce a server answer.
+
+Store-managed subscriptions are out of scope for these two calls: Google Play and
+RuStore own renewal for what they sold, and a subscriber cancels those in the
+store's own subscription settings.
+
 ## Build variants
 
 The executable [Android flavor sample](../samples/android-flavors) demonstrates:

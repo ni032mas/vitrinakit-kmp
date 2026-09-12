@@ -8,6 +8,8 @@ enum class VitrinaHttpMethod {
     GET,
     /** HTTP POST request. */
     POST,
+    /** HTTP DELETE request. */
+    DELETE,
 }
 
 /**

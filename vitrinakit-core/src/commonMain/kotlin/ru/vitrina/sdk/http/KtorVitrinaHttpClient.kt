@@ -34,4 +34,5 @@ class KtorVitrinaHttpClient(
 private fun VitrinaHttpMethod.toKtor(): HttpMethod = when (this) {
     VitrinaHttpMethod.GET -> HttpMethod.Get
     VitrinaHttpMethod.POST -> HttpMethod.Post
+    VitrinaHttpMethod.DELETE -> HttpMethod.Delete
 }

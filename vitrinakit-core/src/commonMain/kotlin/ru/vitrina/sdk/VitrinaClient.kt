@@ -19,6 +19,8 @@ import ru.vitrina.sdk.http.VitrinaHttpMethod
 import ru.vitrina.sdk.http.VitrinaHttpRequest
 import ru.vitrina.sdk.model.CheckoutSession
 import ru.vitrina.sdk.model.Paywall
+import ru.vitrina.sdk.model.SubscriberPaymentMethodState
+import ru.vitrina.sdk.model.SubscriberRenewalState
 import ru.vitrina.sdk.model.SubscriberState
 import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
 import ru.vitrina.sdk.model.VitrinaError
@@ -170,6 +172,47 @@ internal class VitrinaClient(
         ),
         decode = { payload -> json.decodeFromString<SubscriberState>(payload) },
         errorMapper = ::subscriberError,
+    )
+
+    /**
+     * Turns auto-renewal off for the subscription the authenticated subscriber owns.
+     *
+     * The request carries no body: the subscription is identified by the same authority every other
+     * subscriber call uses. A repeated cancellation answers with the state the first one produced
+     * rather than a rejection, so a caller never has to remember whether it asked already.
+     */
+    internal suspend fun cancelSubscriptionRenewal(
+        externalUserId: String?,
+        subscriberSession: String?,
+        idempotencyKey: String,
+    ): VitrinaResult<SubscriberRenewalState> = request(
+        method = VitrinaHttpMethod.POST,
+        path = "/api/v1/subscriber/subscription/cancel-renewal",
+        body = null,
+        additionalHeaders = subscriberHeaders(subscriberId = externalUserId, sessionToken = subscriberSession) +
+            (IdempotencyHeader to idempotencyKey),
+        decode = { payload -> json.decodeFromString<SubscriberRenewalState>(payload) },
+        errorMapper = ::subscriptionManagementError,
+    )
+
+    /**
+     * Removes the payment method stored for the subscriber's renewal charges.
+     *
+     * Removing what future charges would use also stops renewal, which is why the response reports
+     * both. Access already paid for is untouched.
+     */
+    internal suspend fun detachSubscriptionPaymentMethod(
+        externalUserId: String?,
+        subscriberSession: String?,
+        idempotencyKey: String,
+    ): VitrinaResult<SubscriberPaymentMethodState> = request(
+        method = VitrinaHttpMethod.DELETE,
+        path = "/api/v1/subscriber/subscription/payment-method",
+        body = null,
+        additionalHeaders = subscriberHeaders(subscriberId = externalUserId, sessionToken = subscriberSession) +
+            (IdempotencyHeader to idempotencyKey),
+        decode = { payload -> json.decodeFromString<SubscriberPaymentMethodState>(payload) },
+        errorMapper = ::subscriptionManagementError,
     )
 
     internal suspend fun createCheckoutSession(
@@ -544,6 +587,33 @@ internal class VitrinaClient(
         else -> VitrinaError.Network(body)
     }
 
+    /**
+     * Maps a subscription-management rejection onto the typed error contract.
+     *
+     * Anything the server itself answered is a subscription outcome rather than a transport
+     * failure: a `409` that says the subscription is already cancelled has to reach the app as
+     * something it can show the subscriber, not as "the request never arrived".
+     */
+    private fun subscriptionManagementError(statusCode: Int, body: String): VitrinaError = when (statusCode) {
+        HttpStatusUnauthorized,
+        HttpStatusForbidden,
+        -> VitrinaError.Auth(subscriptionManagementDetail(body = body))
+
+        in ClientErrorStatusRange -> VitrinaError.Subscription(subscriptionManagementDetail(body = body))
+        else -> VitrinaError.Network(subscriptionManagementDetail(body = body))
+    }
+
+    private fun subscriptionManagementDetail(body: String): String {
+        val parsed = parseErrorBody(body = body) ?: return body
+        return parsed.errorText(DetailField)
+            ?: parsed.errorText(MessageField)
+            ?: parsed.errorText(ErrorField)
+            ?: body
+    }
+
+    private fun JsonObject.errorText(field: String): String? =
+        (get(field) as? JsonPrimitive)?.contentOrNull?.takeIf { value -> value.isNotBlank() }
+
     private fun identityError(statusCode: Int, body: String): VitrinaError = when (statusCode) {
         HttpStatusBadRequest,
         HttpStatusUnauthorized,
@@ -671,7 +741,9 @@ private const val HttpStatusForbidden = 403
 private const val HttpStatusNotFound = 404
 private const val HttpStatusConflict = 409
 private const val HttpStatusServerError = 500
+private val ClientErrorStatusRange = 400..499
 private const val ErrorField = "error"
+private const val DetailField = "detail"
 private const val ErrorCodeField = "code"
 private const val MessageField = "message"
 private val LowercaseAsciiRange = 'a'.code..'z'.code

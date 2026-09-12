@@ -290,11 +290,105 @@ data class SubscriberEntitlementState(
 )
 
 /**
+ * Stored payment method that future renewal charges would use.
+ *
+ * @property brand Payment card brand reported by the payment provider.
+ * @property last4 Last four digits of the stored payment card.
+ */
+@Serializable
+data class SubscriberPaymentMethod(
+    /**
+     * Payment card brand reported by the payment provider.
+     *
+     * Deliberately not a typed enum. The provider's accepted brand list grows without an SDK
+     * release, and a closed enum would turn a card the provider has only just started accepting
+     * into a response-decoding failure for every subscriber who pays with one.
+     */
+    val brand: String,
+    /** Last four digits of the stored payment card. */
+    val last4: String,
+)
+
+/**
+ * Renewal state of the subscription attached to a subscriber.
+ *
+ * Auto-renewal is on for every subscription VitrinaKit creates. It only turns off when the
+ * subscriber asks for it, through [ru.vitrina.sdk.VitrinaKit.cancelAutoRenew] or
+ * [ru.vitrina.sdk.VitrinaKit.detachPaymentMethod].
+ *
+ * @property status Current subscription status.
+ * @property currentPeriodEnd End of the paid period in ISO-8601 UTC format.
+ * @property nextChargeAt Next renewal charge in ISO-8601 UTC format.
+ * @property autoRenewEnabled Whether the subscription renews itself when the paid period ends.
+ * @property paymentMethod Payment method stored for renewal charges.
+ */
+@Serializable
+data class SubscriberSubscription(
+    /** Current subscription status. */
+    val status: SubscriptionStatus,
+    /** End of the paid period in ISO-8601 UTC format. Access lasts until this moment. */
+    @SerialName("current_period_end")
+    val currentPeriodEnd: String,
+    /** Next renewal charge in ISO-8601 UTC format, or `null` when nothing will be charged. */
+    @SerialName("next_charge_at")
+    val nextChargeAt: String? = null,
+    /**
+     * Whether the subscription renews itself when the paid period ends.
+     *
+     * The default is `true` and must stay `true`: a payload that omits the flag describes a
+     * subscription VitrinaKit created with renewal on, and reading its absence as "renewal is off"
+     * would tell the subscriber their access is ending when it is not.
+     */
+    @SerialName("auto_renew_enabled")
+    val autoRenewEnabled: Boolean = true,
+    /** Payment method stored for renewal charges, or `null` when nothing is stored. */
+    @SerialName("payment_method")
+    val paymentMethod: SubscriberPaymentMethod? = null,
+)
+
+/**
+ * Auto-renewal state returned after a cancellation request.
+ *
+ * Cancelling renewal never ends the paid period: access lasts until [currentPeriodEnd].
+ *
+ * @property autoRenewEnabled Whether the subscription still renews itself.
+ * @property currentPeriodEnd End of the paid period in ISO-8601 UTC format.
+ */
+@Serializable
+data class SubscriberRenewalState(
+    /** Whether the subscription still renews itself. `false` once the server confirmed cancellation. */
+    @SerialName("auto_renew_enabled")
+    val autoRenewEnabled: Boolean,
+    /** End of the paid period in ISO-8601 UTC format. Access lasts until this moment. */
+    @SerialName("current_period_end")
+    val currentPeriodEnd: String,
+)
+
+/**
+ * Stored payment method state returned after a detach request.
+ *
+ * Detaching removes what future charges would use. It never revokes access already paid for.
+ *
+ * @property paymentMethod Payment method still stored for renewal charges.
+ * @property autoRenewEnabled Whether the subscription still renews itself.
+ */
+@Serializable
+data class SubscriberPaymentMethodState(
+    /** Payment method still stored for renewal charges. `null` once nothing can be charged again. */
+    @SerialName("payment_method")
+    val paymentMethod: SubscriberPaymentMethod? = null,
+    /** Whether the subscription still renews itself. Nothing renews without a stored payment method. */
+    @SerialName("auto_renew_enabled")
+    val autoRenewEnabled: Boolean,
+)
+
+/**
  * Aggregated access state for one external user.
  *
  * @property externalUserId Integrating app user identifier.
  * @property hasAccess Whether the subscriber currently has paid access.
  * @property entitlements Entitlements known for the subscriber.
+ * @property subscription Renewal state of the subscriber's subscription.
  */
 @Serializable
 data class SubscriberState(
@@ -306,6 +400,8 @@ data class SubscriberState(
     val hasAccess: Boolean,
     /** Entitlements known for the subscriber. */
     val entitlements: List<SubscriberEntitlementState>,
+    /** Renewal state of the subscriber's subscription, or `null` when the subscriber has none. */
+    val subscription: SubscriberSubscription? = null,
     /** Whether startup store restoration is still resolving the authoritative access state. */
     @Transient
     val accessResolution: VitrinaKitAccessResolution = VitrinaKitAccessResolution.CURRENT,
@@ -468,6 +564,18 @@ typealias VitrinaKitProfile = SubscriberState
 
 /** VitrinaKit access level state returned inside a profile. */
 typealias VitrinaKitAccessLevel = SubscriberEntitlementState
+
+/** VitrinaKit subscription renewal state carried by a profile. */
+typealias VitrinaKitSubscription = SubscriberSubscription
+
+/** VitrinaKit stored payment method summary carried by a subscription. */
+typealias VitrinaKitPaymentMethod = SubscriberPaymentMethod
+
+/** VitrinaKit auto-renewal state returned by [ru.vitrina.sdk.VitrinaKit.cancelAutoRenew]. */
+typealias VitrinaKitRenewalState = SubscriberRenewalState
+
+/** VitrinaKit stored payment method state returned by [ru.vitrina.sdk.VitrinaKit.detachPaymentMethod]. */
+typealias VitrinaKitPaymentMethodState = SubscriberPaymentMethodState
 
 /**
  * Result wrapper returned by high-level VitrinaKit facade operations.

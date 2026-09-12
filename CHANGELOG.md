@@ -1,6 +1,49 @@
 # VitrinaKit KMP SDK Changelog
 
-## Unreleased
+## 0.1.0-rc.16
+
+Subscription management release candidate. A renewing subscription could be
+read but not acted on: an app could show that renewal was on and had no way to
+turn it off, so cancelling meant writing to support.
+
+### Added
+
+- The subscriber profile carries the renewal state of the subscription behind
+  it. `VitrinaKitProfile.subscription` is a new `VitrinaKitSubscription` with
+  `status`, `currentPeriodEnd`, `nextChargeAt`, `autoRenewEnabled`, and a
+  `paymentMethod` summary (`brand`, `last4`). It is `null` for a subscriber who
+  owns no subscription, and `paymentMethod` is `null` when nothing is stored to
+  charge. The per-entitlement `autoRenewEnabled` flag is unchanged.
+
+  Auto-renewal is on for every subscription VitrinaKit creates. The model says
+  so: a payload that omits `auto_renew_enabled` decodes as `true`, because
+  reading a missing flag as "renewal is off" would tell a subscriber their
+  access is ending when it is not.
+
+- `VitrinaKit.cancelAutoRenew()` stops future charges and keeps access until the
+  paid period ends, through `POST /api/v1/subscriber/subscription/cancel-renewal`.
+  It returns `VitrinaKitRenewalState` with the renewal flag and the moment access
+  actually ends.
+
+- `VitrinaKit.detachPaymentMethod()` removes the card future charges would use,
+  through `DELETE /api/v1/subscriber/subscription/payment-method`. It returns
+  `VitrinaKitPaymentMethodState`. Nothing can be charged again afterwards, so
+  renewal stops with the card; access already paid for is never revoked.
+
+  Both calls are idempotent. A repeat after the state is already reached is a
+  success reporting the same state, not an error, so a retry after a lost
+  response is safe. Each confirmed change is folded into the cached profile, so
+  a cached `getProfile()` cannot keep reporting renewal as on right after the
+  subscriber turned it off.
+
+  A server rejection surfaces as a typed error rather than a transport failure:
+  `VitrinaKitError.Subscription` for a refused change, `VitrinaKitError.Auth` for
+  `401`/`403`, and `VitrinaKitError.Network` only for a response the server did
+  not produce.
+
+- `VitrinaHttpMethod.DELETE`, required by the payment-method route. A custom
+  `VitrinaHttpClient` that exhaustively matched on `VitrinaHttpMethod` needs a
+  branch for it; implementations that pass the method through are unaffected.
 
 ### Changed
 

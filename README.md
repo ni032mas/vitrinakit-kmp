@@ -134,6 +134,28 @@ val recoveredPurchase = VitrinaKit.onForeground()
 VitrinaKit.logout()
 ```
 
+The subscriber profile carries the renewal state of the subscription behind it,
+and the subscriber can act on it. Auto-renewal is on for every subscription
+VitrinaKit creates; only these calls turn it off, and neither takes away access
+already paid for.
+
+```kotlin
+profile.subscription?.let { subscription ->
+    renderNextCharge(subscription.nextChargeAt, subscription.currentPeriodEnd)
+    subscription.paymentMethod?.let { method -> renderCard(method.brand, method.last4) }
+}
+
+// Stops future charges; access lasts until the paid period ends.
+VitrinaKit.cancelAutoRenew()
+
+// Removes the stored card, so nothing can be charged again.
+VitrinaKit.detachPaymentMethod()
+```
+
+Both are idempotent: asking again once the state is reached succeeds instead of
+failing. A server rejection arrives as `VitrinaKitError.Subscription`, never as a
+network error.
+
 If the application backend mints opaque VitrinaKit subscriber sessions, bind
 one with `VitrinaKit.setSubscriberSession(session)`. Session-authenticated
 requests use that bearer session as their only authorization authority. Email

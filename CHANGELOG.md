@@ -1,5 +1,355 @@
 # VitrinaKit KMP SDK Changelog
 
+## 0.1.0-rc.16
+
+Subscription management release candidate. A renewing subscription could be
+read but not acted on: an app could show that renewal was on and had no way to
+turn it off, so cancelling meant writing to support.
+
+### Added
+
+- The subscriber profile carries the renewal state of the subscription behind
+  it. `VitrinaKitProfile.subscription` is a new `VitrinaKitSubscription` with
+  `status`, `currentPeriodEnd`, `nextChargeAt`, `autoRenewEnabled`, and a
+  `paymentMethod` summary (`brand`, `last4`). It is `null` for a subscriber who
+  owns no subscription, and `paymentMethod` is `null` when nothing is stored to
+  charge. The per-entitlement `autoRenewEnabled` flag is unchanged.
+
+  Auto-renewal is on for every subscription VitrinaKit creates. The model says
+  so: a payload that omits `auto_renew_enabled` decodes as `true`, because
+  reading a missing flag as "renewal is off" would tell a subscriber their
+  access is ending when it is not.
+
+- `VitrinaKit.cancelAutoRenew()` stops future charges and keeps access until the
+  paid period ends, through `POST /api/v1/subscriber/subscription/cancel-renewal`.
+  It returns `VitrinaKitRenewalState` with the renewal flag and the moment access
+  actually ends.
+
+- `VitrinaKit.detachPaymentMethod()` removes the card future charges would use,
+  through `DELETE /api/v1/subscriber/subscription/payment-method`. It returns
+  `VitrinaKitPaymentMethodState`. Nothing can be charged again afterwards, so
+  renewal stops with the card; access already paid for is never revoked.
+
+  Both calls are idempotent. A repeat after the state is already reached is a
+  success reporting the same state, not an error, so a retry after a lost
+  response is safe. Each confirmed change is folded into the cached profile, so
+  a cached `getProfile()` cannot keep reporting renewal as on right after the
+  subscriber turned it off.
+
+  A server rejection surfaces as a typed error rather than a transport failure:
+  `VitrinaKitError.Subscription` for a refused change, `VitrinaKitError.Auth` for
+  `401`/`403`, and `VitrinaKitError.Network` only for a response the server did
+  not produce.
+
+- `VitrinaHttpMethod.DELETE`, required by the payment-method route. A custom
+  `VitrinaHttpClient` that exhaustively matched on `VitrinaHttpMethod` needs a
+  branch for it; implementations that pass the method through are unaffected.
+
+### Changed
+
+- Restore composition is now server-side. `POST /api/v1/purchases/restore`
+  no longer accepts `placement_key` or `product_reference` per purchase; the
+  server resolves the placement and catalog product itself, from the purchase
+  it already knows by proof fingerprint or from the store's own product ID.
+  Sending either field is rejected with `400`.
+
+  `VitrinaKitRestorablePurchase` drops `placementId` and `productReference`
+  and gains `providerProductId`, the store's own product identifier read off
+  the purchase. It is optional for Google Play, whose purchase token is
+  self-describing to the server, and required for RuStore, whose API cannot
+  be queried without the subscription ID. `GooglePlayPurchaseAdapter` and
+  `RuStorePurchaseAdapter` no longer take a `restoreReferenceResolver`
+  constructor parameter — the application no longer declares a restore
+  catalog mapping, and `queryRestorablePurchases()` on both adapters now
+  reports every purchase visible to the current store account instead of
+  filtering by that mapping, because the server discards products the
+  application does not sell.
+
+  This is a breaking change to `0.1.0-rc.*` and has no compatibility shim:
+  the old request fields are rejected outright, so a resolver-based
+  integration must remove the constructor argument and the resolver types it
+  referenced.
+
+## 0.1.0-rc.15
+
+### Fixed
+
+- Hosted checkout now addresses the purchase attempt rather than the checkout
+  session. `CheckoutSession` carries the new `purchase_attempt_reference` field
+  Vitrina returns, and the adapter uses it for cancellation and for the
+  references it reports on `Pending` and `Success`.
+
+  Until now those references were session ids. That was invisible while nothing
+  looked them up, and became a real failure the moment rc.14 tried to cancel:
+  the server answered 404 for an id that named a checkout session, and the
+  attempt the buyer had abandoned stayed open. Found by running the release
+  payment matrix against production, not by reading the code.
+
+  Requires a Vitrina backend that returns `purchase_attempt_reference`.
+
+## 0.1.0-rc.14
+
+### Added
+
+- Hosted checkout now ends the purchase attempt on the server when the buyer
+  deterministically closes the payment page. Until now the attempt stayed open
+  until it expired, which held the buyer's next purchase hostage and left the app
+  with no stable server code to localize — it could only report a cancellation it
+  had decided locally. The adapter calls the new
+  `POST /api/v1/purchase-attempts/{reference}/cancel` through a core-owned
+  operation, so it never sees a transport credential.
+
+  The cancellation is only ever reported as one when the server confirms it. An
+  exhausted poll loop deliberately does **not** cancel: that outcome is unknown —
+  the browser may still be open, a resumed checkout may still be in flight — and
+  taking the purchase away from a buyer who is still making it is worse than
+  waiting. A failed cancel call leaves the existing result untouched.
+
+  `VitrinaKitHostedPurchaseRequest` carries a new `cancel` operation. This is a
+  source change for anyone constructing that type directly, which is opt-in
+  `@VitrinaKitPurchaseAdapterApi` surface; the public sealed result types are
+  unchanged.
+
+## 0.1.0-rc.13
+
+### Fixed
+
+- `createCheckoutSession` now sends the `Idempotency-Key` header the endpoint
+  requires. Without it the API answers 400 before it reads the body, so every
+  hosted purchase failed even after the request body was corrected in rc.12.
+  The key is created once per purchase attempt, so a retry reuses the session
+  the server already made instead of opening a second payment for one buyer.
+  Every other idempotent call in the client already sent the header; checkout
+  was the one that did not, and the request-body contract test could not see it
+  because a contract is the whole request, not only its body.
+
+## 0.1.0-rc.12
+
+Checkout request-shape release candidate. Every hosted checkout attempt
+failed with a `400` in production because the SDK sent a body the API
+rejects and omitted the two fields it requires.
+
+### Fixed
+
+- `CheckoutSessionRequest` now sends `placement_key` and `product_reference`
+  and no longer sends `external_user_id`, `product_id`, `price_id`, or
+  `receipt_email`. The handler decodes with unknown fields disallowed, so the
+  old body was rejected outright; subscriber identity comes from the
+  `X-Vitrina-Subscriber-Id` header or the bearer session, and the receipt
+  address is the server-side verified one. The placement is now carried with
+  the cached paywall the product was loaded from — both `VitrinaKit.purchase`
+  and the deprecated `VitrinaKit.makePurchase` reject a product that did not
+  come from `getPaywall` instead of sending a checkout request with no
+  placement.
+- A `4xx` checkout response whose `code` this SDK does not recognize no
+  longer surfaces as `VitrinaKitError.Network`. A response the server sent is
+  never a network failure; it now maps to `VitrinaKitError.Provider` with the
+  server's body, matching the existing `409` fallback.
+
+### Note
+
+- `HostedCheckoutConfiguration.receiptEmail` is no longer read into the
+  checkout request body (the server owns the verified receipt address). The
+  callback itself is left in place for this release to avoid an unscoped
+  breaking change to the hosted-adapter API while this fix ships; removing it
+  is tracked as follow-up cleanup.
+
+## 0.1.0-rc.11
+
+Paywall response shape release candidate. Every paywall load failed to parse
+in production despite a successful HTTP call.
+
+### Fixed
+
+- `Paywall` no longer declares `paywall_id`, `config`, or `fallback_config`.
+  The API sends only `placement_key` and `products`; the three removed
+  properties were non-nullable with no defaults, so `kotlinx.serialization`
+  threw on every real response and `getPaywall()` returned
+  `VitrinaKitResult.Failure` after a `200 OK`. The model now matches the
+  documented integration contract, which states the response carries no
+  paywall configuration, experiment, variant, or fallback fields.
+
+## 0.1.0-rc.10
+
+Android target release candidate. An Android integrator on an earlier RC gets a
+completely inert SDK; upgrading is the only fix.
+
+### Fixed
+
+- The SDK now publishes an Android target, `vitrinakit-kmp-sdk-android`.
+  Previously `vitrinakit-core` declared only `jvm()` and iOS targets, so an
+  Android consumer resolved `vitrinakit-kmp-sdk-jvm` and ran the JVM build on a
+  phone. Its default installation-id storage persists through
+  `java.util.prefs`, which has no working backing store on Android: `activate()`
+  failed, every later call short-circuited to `notActivated()` without a network
+  request, and the integration was inert while looking configured. The Android
+  default storage is backed by `SharedPreferences` and is discovered through an
+  `androidx.startup` initializer, so an integrator supplies nothing.
+- `VitrinaKitConfig.Builder` no longer constructs the default storage eagerly.
+  A caller that supplied its own storage still triggered the JVM default, which
+  logged `java.util.prefs` warnings on every Android launch even when unused.
+- Published Android artifacts now ship consumer ProGuard rules; they previously
+  contained none, leaving every integrator with `isMinifyEnabled = true` to
+  discover the keep rules themselves.
+- Checkout refused for a missing verified email now surfaces
+  `VitrinaCheckoutErrorCode.EMAIL_VERIFICATION_REQUIRED` instead of a generic
+  server failure. `HostedCheckoutAdapter.purchase()` no longer collapses every
+  checkout condition into `INVALID_REQUEST` with a placeholder message —
+  `RECEIPT_EMAIL_REQUIRED`, `INVALID_RECEIPT_EMAIL`,
+  `ACTIVE_SUBSCRIPTION_EXISTS`, and `EMAIL_VERIFICATION_REQUIRED` each reach
+  `purchase()` as their own `VitrinaKitPurchaseErrorCode` with the server's
+  explanatory message attached.
+
+## 0.1.0-rc.9
+
+JVM target pinning release candidate.
+
+### Fixed
+
+- Every published JVM and Android artifact now declares an explicit JVM
+  target (17) instead of inheriting whatever JDK happened to build it. Prior
+  RCs silently shipped Java 21 bytecode because CI built on JDK 21, which
+  broke consumers on JDK 17 with `UnsupportedClassVersionError`. JDK 17 is now
+  a stated, verified requirement instead of an accident of the release
+  machine's JDK version.
+
+### Added
+
+- `make verify` now reads the compiled class files of every published JVM and
+  Android artifact and fails if their bytecode level does not match the
+  declared JVM target, so this cannot regress by changing the CI JDK again.
+
+## 0.1.0-rc.8
+
+Subscriber identity tiers and recovery release candidate.
+
+### Added
+
+- Persistent installation identities on JVM and iOS, with automatic
+  non-blocking store restoration and explicit access-resolution state.
+- Subscriber association through `identify(userId)`, opaque backend sessions
+  via `setSubscriberSession(session)`, and privacy-safe email verification
+  recovery through `requestEmailVerification` and `confirmEmailVerification`.
+
+### Changed
+
+- Publishable-key, subscriber-ID, and bearer-session requests now follow three
+  explicit authorization tiers while always sending the installation ID.
+- `logout()` rotates the installation ID so a shared device cannot reconnect a
+  later user to the previous subscriber.
+
+### Removed
+
+- The signed client subscriber-token identity path. Update integrations to call
+  `identify(userId)` for application-user association, or bind an opaque
+  backend-minted session with `setSubscriberSession(session)`; do not supply a
+  signed subscriber token to the SDK.
+- The separate application ID from client configuration. Activation now uses
+  the publishable key and the SDK-managed installation ID.
+
+## 0.1.0-rc.7
+
+Provider-neutral purchase adapter release candidate.
+
+### Added
+
+- Identity-bound core purchase and restore APIs with server-authoritative
+  success, pending, cancellation, and privacy-safe failures.
+- Isolated hosted checkout, Google Play Billing 9.1.0, and RuStore Pay 11.0.0
+  adapter artifacts.
+- Hosted checkout iOS device and simulator publications, plus a
+  `VitrinaKitHosted.xcframework` that exports the core API and hosted adapter.
+- Foreground query recovery, explicit restore catalog mappings, and
+  subscriber-scoped lifecycle cleanup.
+- Executable Android flavor sample for Google Play and hosted compositions.
+- Public identity, purchase, migration, provider setup, and sandbox guides.
+
+### Changed
+
+- Feature code now calls `identify`, `purchase(product)`, and
+  `restorePurchases()` without provider-specific purchase parameters.
+- Hosted-shaped `makePurchase` overloads are deprecated for the 0.1 RC
+  migration line.
+- Release verification now enforces complete publication topology, provider
+  dependency isolation, Apple target dependencies, sample adapter cardinality,
+  and flavor graph purity.
+
+### Release Channel
+
+- Core production coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.7`.
+- Provider production coordinates:
+  `ru.vitrina:vitrinakit-hosted:0.1.0-rc.7`,
+  `ru.vitrina:vitrinakit-googleplay:0.1.0-rc.7`, and
+  `ru.vitrina:vitrinakit-rustore:0.1.0-rc.7`.
+- Development artifacts append `-dev` to every artifact ID.
+- Publishing is not part of this source RC commit.
+
+## 0.1.0-rc.6
+
+Checkout receipt and open-session reuse release candidate.
+
+### Added
+
+- Checkout requests now require `receiptEmail`, serialized as
+  `receipt_email`, for receipt delivery.
+- Checkout responses expose `reused` so consumer apps can identify an existing
+  open checkout session.
+- Public `VitrinaCheckoutErrorCode` checkout error codes for consumer handling:
+  `receipt_email_required`, `invalid_receipt_email`, and
+  `checkout_active_subscription_exists`.
+- Typed checkout failures through `VitrinaError.Checkout` and
+  `VitrinaKitError.Checkout`.
+
+### Release Channel
+
+- Production coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.6`.
+- Development coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk-dev:0.1.0-rc.6`.
+
+## 0.1.0-rc.4
+
+Development endpoint correction release candidate.
+
+### Fixed
+
+- Development SDK artifacts now compile the API base URL as
+  `https://api.dev.vitrinakit.ru`.
+
+### Release Channel
+
+- Production coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.4`.
+- Development coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk-dev:0.1.0-rc.4`.
+
+## 0.1.0-rc.3
+
+Release candidate for the Adapty-style VitrinaKit mobile SDK facade.
+
+### Added
+
+- Static `VitrinaKit` facade with activation, paywall fetch, product listing,
+  hosted purchase session creation, profile refresh, and blocking JVM helpers.
+- SDK-owned Ktor transport for JVM and iOS targets.
+- Development publication channel:
+  `ru.vitrina:vitrinakit-kmp-sdk-dev:0.1.0-rc.3`.
+
+### Changed
+
+- API endpoint and environment selection are compiled into the published SDK
+  artifact instead of being configured by mobile application code.
+- Manual publish workflow now verifies and publishes both production and
+  development SDK artifacts for the requested version.
+
+### Release Channel
+
+- Production coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk:0.1.0-rc.3`.
+- Development coordinate:
+  `ru.vitrina:vitrinakit-kmp-sdk-dev:0.1.0-rc.3`.
+
 ## 0.1.0-rc.2
 
 Compatibility release candidate for LitoFit mobile integration.

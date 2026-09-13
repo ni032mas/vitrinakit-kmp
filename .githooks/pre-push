@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Blocks protected-branch rewrites and runs the SDK verification gate.
+
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+protected_branches="dev main"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  remote_branch="$(echo "$remote_ref" | sed 's|refs/heads/||')"
+
+  for protected in $protected_branches; do
+    if [ "$remote_branch" = "$protected" ]; then
+      if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        echo "ERROR: Deleting protected branch '$protected' is not allowed." >&2
+        exit 1
+      fi
+
+      if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        continue
+      fi
+
+      if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+        cat >&2 <<EOF
+
+GIT HOOK: pre-push
+ERROR: Force push to '$protected' is not allowed.
+
+Fix with:
+  git pull --rebase origin $protected
+  git push origin $protected
+EOF
+        exit 1
+      fi
+    fi
+  done
+done
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "ERROR: gitleaks is required for pushes. Install it with: brew install gitleaks" >&2
+  exit 1
+fi
+
+echo "Running pre-push verification..." >&2
+gitleaks git "$ROOT" --redact --no-banner
+make -C "$ROOT" verify

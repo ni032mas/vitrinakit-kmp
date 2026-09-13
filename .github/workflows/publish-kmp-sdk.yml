@@ -36,11 +36,20 @@ jobs:
             exit 1
           fi
 
-      - name: Verify release artifacts
-        run: ./gradlew verifyReleaseArtifacts
+      - name: Verify production release artifacts
+        run: ./gradlew -PvitrinaKitPublication=production verifyReleaseArtifacts
 
-      - name: Publish to GitHub Packages
+      - name: Verify development release artifacts
+        run: ./gradlew -PvitrinaKitPublication=development verifyReleaseArtifacts
+
+      - name: Publish production to GitHub Packages
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./gradlew publishAllPublicationsToGitHubPackagesRepository
+        run: ./gradlew -PvitrinaKitPublication=production publishAllPublicationsToGitHubPackagesRepository
+
+      - name: Publish development to GitHub Packages
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./gradlew -PvitrinaKitPublication=development publishAllPublicationsToGitHubPackagesRepository

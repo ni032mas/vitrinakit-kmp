@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Blocks protected-branch commits and scans staged changes for secrets.
+
+set -euo pipefail
+
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+
+if [ -n "$branch" ] && { [ "$branch" = "dev" ] || [ "$branch" = "main" ]; }; then
+  cat >&2 <<EOF
+
+GIT HOOK: pre-commit
+ERROR: Direct commits to '$branch' are not allowed.
+
+Create a feature branch first:
+  git switch dev
+  git pull --rebase
+  git switch -c chore/<issue>-<short-name>
+EOF
+  exit 1
+fi
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "ERROR: gitleaks is required for commits. Install it with: brew install gitleaks" >&2
+  exit 1
+fi
+
+echo "Running staged secret scan..." >&2
+ROOT="$(git rev-parse --show-toplevel)"
+gitleaks git --staged --redact --no-banner "$ROOT"

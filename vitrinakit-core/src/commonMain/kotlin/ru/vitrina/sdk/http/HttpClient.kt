@@ -1,0 +1,65 @@
+package ru.vitrina.sdk.http
+
+/**
+ * HTTP methods used by the VitrinaKit SDK transport layer.
+ */
+enum class VitrinaHttpMethod {
+    /** HTTP GET request. */
+    GET,
+    /** HTTP POST request. */
+    POST,
+    /** HTTP DELETE request. */
+    DELETE,
+}
+
+/**
+ * Platform-neutral HTTP request passed to a host-provided transport.
+ *
+ * @property method HTTP method.
+ * @property url Absolute request URL.
+ * @property path API path relative to the configured VitrinaKit base URL.
+ * @property headers Request headers.
+ * @property body Optional JSON request body.
+ */
+data class VitrinaHttpRequest(
+    /** HTTP method. */
+    val method: VitrinaHttpMethod,
+    /** Absolute request URL. */
+    val url: String,
+    /** API path relative to the configured VitrinaKit base URL. */
+    val path: String,
+    /** Request headers. */
+    val headers: Map<String, String>,
+    /** Optional JSON request body. */
+    val body: String?,
+) {
+    /** Returns request metadata while always redacting the request body and header values. */
+    override fun toString(): String =
+        "VitrinaHttpRequest(method=$method, url=$url, path=$path, headers=${headers.keys}, body=<redacted>)"
+}
+
+/**
+ * Platform-neutral HTTP response returned by a host-provided transport.
+ *
+ * @property statusCode HTTP response status code.
+ * @property body Raw response body.
+ */
+data class VitrinaHttpResponse(
+    /** HTTP response status code. */
+    val statusCode: Int,
+    /** Raw response body. */
+    val body: String,
+) {
+    /** Returns response metadata while always redacting the response body. */
+    override fun toString(): String = "VitrinaHttpResponse(statusCode=$statusCode, body=<redacted>)"
+}
+
+/**
+ * Host-provided HTTP transport used by advanced [ru.vitrina.sdk.VitrinaKitConfig] integrations.
+ */
+interface VitrinaHttpClient {
+    /**
+     * Sends a request and returns the raw response.
+     */
+    suspend fun send(request: VitrinaHttpRequest): VitrinaHttpResponse
+}

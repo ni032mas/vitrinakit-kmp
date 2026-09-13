@@ -1,0 +1,198 @@
+package ru.vitrina.sdk.purchase
+
+/**
+ * Marks the low-level boundary implemented by official VitrinaKit provider adapter artifacts.
+ *
+ * Application feature code should use [ru.vitrina.sdk.VitrinaKit.purchase] instead.
+ */
+@RequiresOptIn(
+    message = "This API is for VitrinaKit provider adapter artifacts, not application feature code.",
+    level = RequiresOptIn.Level.WARNING,
+)
+@Retention(AnnotationRetention.BINARY)
+@Target(AnnotationTarget.CLASS, AnnotationTarget.FUNCTION, AnnotationTarget.PROPERTY, AnnotationTarget.CONSTRUCTOR)
+annotation class VitrinaKitPurchaseAdapterApi
+
+/**
+ * Presentation and local-recovery boundary implemented by official provider adapter artifacts.
+ */
+interface VitrinaKitPurchaseAdapter {
+    /** Capability packaged by this adapter. */
+    val capability: VitrinaKitPurchaseCapability
+
+    /** Presents the server-issued instruction through the provider SDK. */
+    @VitrinaKitPurchaseAdapterApi
+    suspend fun present(instruction: VitrinaKitPurchaseInstruction): VitrinaKitAdapterPurchaseResult
+
+    /** Queries purchases visible to the current provider account for restore. */
+    @VitrinaKitPurchaseAdapterApi
+    suspend fun queryRestorablePurchases(): List<VitrinaKitRestorablePurchase>
+
+    /** Resumes an interrupted presentation using only opaque adapter state. */
+    @VitrinaKitPurchaseAdapterApi
+    suspend fun resume(
+        instruction: VitrinaKitPurchaseInstruction,
+        resumeData: VitrinaKitPurchaseResumeData,
+    ): VitrinaKitAdapterPurchaseResult
+
+    /**
+     * Queries provider state for one core-tracked attempt without presenting provider UI.
+     *
+     * This may run concurrently with [present]. If both observe the same terminal provider state,
+     * the adapter must hand it to exactly one caller and return `null` from the other. Returning
+     * `null` otherwise means no new provider state is available. The default is a safe no-op;
+     * query-capable provider adapters must override this explicitly. [resumeData] is supplied only
+     * as opaque context and must never cause this method to present provider UI.
+     */
+    @VitrinaKitPurchaseAdapterApi
+    suspend fun recover(
+        instruction: VitrinaKitPurchaseInstruction,
+        resumeData: VitrinaKitPurchaseResumeData?,
+    ): VitrinaKitAdapterPurchaseResult? = null
+
+    /**
+     * Marks [proof] as accepted by the server so provider-local recovery can suppress duplicates.
+     *
+     * Core invokes this only after a successful confirmation or restore response. The default is a
+     * no-op for adapters that do not maintain provider-local proof deduplication state.
+     */
+    @VitrinaKitPurchaseAdapterApi
+    fun onProofAccepted(proof: VitrinaKitProviderProof) = Unit
+
+    /**
+     * Releases provider resources and cancels adapter-owned recovery work.
+     *
+     * The adapter must support lazy reinitialization if the SDK identifies a subscriber after logout.
+     */
+    fun close()
+}
+
+/**
+ * Server-issued provider presentation instruction.
+ *
+ * @property attemptReference Opaque VitrinaKit attempt reference.
+ * @property productId Provider product identifier selected by the server.
+ * @property priceId Optional provider price or offer identifier selected by the server.
+ * @property packageName Provider application package name.
+ * @property accountBinding Opaque account-binding value supplied to the provider.
+ * @property expiresAt Attempt expiry timestamp in ISO-8601 UTC format.
+ */
+@VitrinaKitPurchaseAdapterApi
+data class VitrinaKitPurchaseInstruction(
+    val attemptReference: String,
+    val productId: String,
+    val priceId: String?,
+    val packageName: String,
+    val accountBinding: String,
+    val expiresAt: String,
+) {
+    /** Returns presentation metadata while redacting the account-binding value. */
+    override fun toString(): String =
+        "VitrinaKitPurchaseInstruction(attemptReference=$attemptReference, productId=$productId, " +
+            "priceId=$priceId, packageName=$packageName, accountBinding=<redacted>, expiresAt=$expiresAt)"
+}
+
+/** Provider proof wrapper whose textual representation is always redacted. */
+@VitrinaKitPurchaseAdapterApi
+class VitrinaKitProviderProof(value: String) {
+    internal val value: String = value
+
+    /** Returns a representation that never includes provider proof. */
+    override fun toString(): String = "VitrinaKitProviderProof(value=<redacted>)"
+}
+
+/**
+ * Opaque provider resume data whose textual representation is always redacted.
+ *
+ * @property value Opaque value consumed only by the provider adapter that created it.
+ */
+@VitrinaKitPurchaseAdapterApi
+class VitrinaKitPurchaseResumeData(val value: String) {
+    /** Returns a representation that never includes the opaque resume value. */
+    override fun toString(): String = "VitrinaKitPurchaseResumeData(value=<redacted>)"
+}
+
+/**
+ * Safe adapter failure without provider payloads.
+ *
+ * @property message Redacted diagnostic message.
+ * @property retryable Whether retrying after provider recovery may succeed.
+ * @property supportReference Optional safe provider support code without provider payloads.
+ */
+@VitrinaKitPurchaseAdapterApi
+data class VitrinaKitAdapterError(
+    val message: String,
+    val retryable: Boolean = false,
+    val supportReference: String? = null,
+)
+
+/**
+ * Carries a typed, redacted adapter failure across an adapter operation that cannot return a result.
+ *
+ * The exception message is fixed and never includes [error] fields or provider payloads.
+ *
+ * @property error Safe adapter failure metadata.
+ */
+@VitrinaKitPurchaseAdapterApi
+class VitrinaKitPurchaseAdapterException(
+    val error: VitrinaKitAdapterError,
+) : Exception("The purchase adapter operation failed.")
+
+/** Outcome returned from provider presentation or resume. */
+@VitrinaKitPurchaseAdapterApi
+sealed interface VitrinaKitAdapterPurchaseResult {
+    /**
+     * Provider proof is ready for server confirmation.
+     *
+     * @property proof Proof passed directly to the core confirmation boundary.
+     */
+    data class ProofReady(
+        val proof: VitrinaKitProviderProof,
+    ) : VitrinaKitAdapterPurchaseResult {
+        /** Returns a representation that never includes provider proof. */
+        override fun toString(): String = "ProofReady(proof=<redacted>)"
+    }
+
+    /**
+     * Provider operation remains pending with opaque resume state.
+     *
+     * @property resumeData Opaque state consumed only by the originating adapter.
+     */
+    data class Pending(
+        val resumeData: VitrinaKitPurchaseResumeData,
+    ) : VitrinaKitAdapterPurchaseResult {
+        /** Returns a representation that never includes opaque resume state. */
+        override fun toString(): String = "Pending(resumeData=<redacted>)"
+    }
+
+    /** User cancelled provider presentation. */
+    data object Cancelled : VitrinaKitAdapterPurchaseResult
+
+    /**
+     * Provider adapter failed safely.
+     *
+     * @property error Safe adapter failure.
+     */
+    data class Failure(val error: VitrinaKitAdapterError) : VitrinaKitAdapterPurchaseResult
+}
+
+/**
+ * Provider purchase eligible for restore.
+ *
+ * The server resolves the placement and catalog product from this purchase; the adapter never
+ * declares a catalog mapping.
+ *
+ * @property providerProductId Store's own product identifier read off this purchase. Optional
+ * where the proof is self-describing to the server (Google Play); required where the provider
+ * API cannot be queried without it (RuStore).
+ * @property proof Provider proof submitted directly to VitrinaKit.
+ */
+@VitrinaKitPurchaseAdapterApi
+data class VitrinaKitRestorablePurchase(
+    val providerProductId: String?,
+    val proof: VitrinaKitProviderProof,
+) {
+    /** Returns restore metadata while always redacting provider proof. */
+    override fun toString(): String =
+        "VitrinaKitRestorablePurchase(providerProductId=$providerProductId, proof=<redacted>)"
+}

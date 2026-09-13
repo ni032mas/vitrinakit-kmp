@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Allows merges into main only from release/* or hotfix/* branches.
+
+set -euo pipefail
+
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+
+if [ "$branch" != "main" ]; then
+  exit 0
+fi
+
+merge_msg_file="$(git rev-parse --git-dir)/MERGE_MSG"
+if [ ! -f "$merge_msg_file" ]; then
+  exit 0
+fi
+
+merge_msg="$(cat "$merge_msg_file")"
+source_branch="$(echo "$merge_msg" | sed -n "s/^Merge branch '\(.*\)'.*/\1/p")"
+
+if [ -z "$source_branch" ]; then
+  source_branch="$(echo "$merge_msg" | sed -n "s/^Merge remote-tracking branch '.*\/\(.*\)'.*/\1/p")"
+fi
+
+if [ -z "$source_branch" ]; then
+  exit 0
+fi
+
+case "$source_branch" in
+  release/*|hotfix/*)
+    exit 0
+    ;;
+  *)
+    cat >&2 <<EOF
+
+GIT HOOK: pre-merge-commit
+ERROR: Only release/* and hotfix/* branches can be merged into main.
+
+Source branch: $source_branch
+
+Create a release or hotfix branch first:
+  git switch -c release/<version> dev
+  git switch -c hotfix/<short-name> main
+EOF
+    exit 1
+    ;;
+esac

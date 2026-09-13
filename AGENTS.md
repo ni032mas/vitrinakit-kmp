@@ -14,6 +14,13 @@ Single-module Kotlin Multiplatform SDK published as `ru.vitrina:vitrinakit-kmp-s
 
 `dev` is the default integration branch. `main` is stable and release-only. Do not commit directly to either branch; create short feature branches such as `chore/3-repository-workflow-hooks`, open PRs into `dev`, and use release PRs from `dev` to `main`.
 
+Merge strategy, which differs by target:
+
+- **PRs into `dev` are squash-merged.**
+- **A release PR into `main` is merged with a regular merge commit, never squash.** Squashing it writes a new commit onto `main` carrying content that already exists on `dev` under different SHAs, so the branches diverge permanently and the next ordinary merge conflicts. The repository permits merge commits for exactly this reason, and rebase merges stay disabled so nothing else can be selected by accident.
+- **Release tags are annotated and point at the merge commit on `main`**, not at the release branch tip.
+- A `main`-into-`dev` sync, when one is needed, is a regular merge, not a squash, so the release history stays connected.
+
 ## API Contract Alignment
 
 This SDK is a public client for VitrinaKit API contracts. Before changing request paths, headers, response models, authentication behavior, or release processes, verify the change against the current server API contract available to maintainers.

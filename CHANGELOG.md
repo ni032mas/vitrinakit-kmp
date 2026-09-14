@@ -1,5 +1,19 @@
 # VitrinaKit KMP SDK Changelog
 
+## 0.1.0-rc.17
+
+Decoding fix. A subscriber whose card summary the platform never captured — a
+payment confirmed before that summary was stored — could not read their profile
+at all: the server reports the summary as `{"brand": null, "last4": null}`, and
+the model demanded two non-null strings, so the whole profile failed to decode.
+
+### Fixed
+
+- `SubscriberPaymentMethod.brand` and `.last4` are nullable and default to
+  `null`, meaning "the provider never returned this" rather than failing the
+  payload. Reading the profile now succeeds for those subscribers; a card whose
+  summary is unknown renders as unknown instead of blank.
+
 ## 0.1.0-rc.16
 
 Subscription management release candidate. A renewing subscription could be
@@ -9,7 +23,7 @@ turn it off, so cancelling meant writing to support.
 ### Added
 
 - The subscriber profile carries the renewal state of the subscription behind
-  it. `VitrinaKitProfile.subscription` is a new `VitrinaKitSubscription` with
+  it. `VitrinaKitProfile.subscription` is a new `SubscriberSubscription` with
   `status`, `currentPeriodEnd`, `nextChargeAt`, `autoRenewEnabled`, and a
   `paymentMethod` summary (`brand`, `last4`). It is `null` for a subscriber who
   owns no subscription, and `paymentMethod` is `null` when nothing is stored to

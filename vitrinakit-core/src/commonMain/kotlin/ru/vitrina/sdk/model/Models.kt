@@ -292,8 +292,9 @@ data class SubscriberEntitlementState(
 /**
  * Stored payment method that future renewal charges would use.
  *
- * @property brand Payment card brand reported by the payment provider.
- * @property last4 Last four digits of the stored payment card.
+ * @property brand Payment card brand reported by the payment provider, or `null` for a card
+ * confirmed before the platform started capturing the summary.
+ * @property last4 Last four digits of the stored payment card, or `null` for the same reason.
  */
 @Serializable
 data class SubscriberPaymentMethod(
@@ -304,9 +305,9 @@ data class SubscriberPaymentMethod(
      * release, and a closed enum would turn a card the provider has only just started accepting
      * into a response-decoding failure for every subscriber who pays with one.
      */
-    val brand: String,
-    /** Last four digits of the stored payment card. */
-    val last4: String,
+    val brand: String? = null,
+    /** Last four digits of the stored payment card, or `null` when it was never captured. */
+    val last4: String? = null,
 )
 
 /**

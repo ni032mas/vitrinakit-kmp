@@ -42,6 +42,18 @@ class SubscriptionManagementTest {
     }
 
     @Test
+    fun profileDecodesWhenTheProviderNeverCapturedTheCardSummary() = runTest {
+        activateAndIdentify(SubscriptionHttpClient(legacyCardSummary = true))
+
+        val profile = assertIs<VitrinaKitResult.Success<VitrinaKitProfile>>(VitrinaKit.getProfile()).value
+
+        val subscription = assertNotNull(profile.subscription)
+        val method = assertNotNull(subscription.paymentMethod)
+        assertNull(method.brand)
+        assertNull(method.last4)
+    }
+
+    @Test
     fun profileCarriesRenewalStateAndStoredPaymentMethod() = runTest {
         activateAndIdentify(SubscriptionHttpClient())
 
@@ -259,6 +271,7 @@ private suspend fun activateAndIdentify(http: VitrinaHttpClient) {
 private class SubscriptionHttpClient(
     private val cancelRenewalResponse: VitrinaHttpResponse? = null,
     private val detachPaymentMethodResponse: VitrinaHttpResponse? = null,
+    private val legacyCardSummary: Boolean = false,
 ) : VitrinaHttpClient {
     val requests = mutableListOf<VitrinaHttpRequest>()
     private var autoRenewEnabled = true
@@ -298,6 +311,7 @@ private class SubscriptionHttpClient(
     private fun currentSubscriberJson(): String = subscriberProfileJson(
         autoRenewEnabled = autoRenewEnabled,
         paymentMethodStored = paymentMethodStored,
+        legacyCardSummary = legacyCardSummary,
     )
 }
 
@@ -330,6 +344,7 @@ private val wireJson = Json { ignoreUnknownKeys = true }
 private fun subscriberProfileJson(
     autoRenewEnabled: Boolean = true,
     paymentMethodStored: Boolean = true,
+    legacyCardSummary: Boolean = false,
 ): String = """
 {
   "external_user_id": "user-1",
@@ -351,7 +366,15 @@ private fun subscriberProfileJson(
     "current_period_end": "$PeriodEnd",
     "next_charge_at": ${if (autoRenewEnabled) "\"$PeriodEnd\"" else "null"},
     "auto_renew_enabled": $autoRenewEnabled,
-    "payment_method": ${if (paymentMethodStored) """{"brand":"mir","last4":"4242"}""" else "null"}
+    "payment_method": ${
+        when {
+            !paymentMethodStored -> "null"
+            // A payment confirmed before the platform captured the summary: the server sends the
+            // object with null fields, which is a real subscriber, not a malformed payload.
+            legacyCardSummary -> """{"brand":null,"last4":null}"""
+            else -> """{"brand":"mir","last4":"4242"}"""
+        }
+    }
   }
 }
 """

@@ -1,6 +1,6 @@
 # VitrinaKit KMP SDK Changelog
 
-## Unreleased
+## 0.1.0-rc.18
 
 Forward-compatibility fix. One value the API introduced after an SDK release
 failed the whole response it arrived in, and a checkout the server refused
@@ -49,6 +49,14 @@ the payment page.
   and native binaries built against an earlier release must be recompiled.
 - Code that caught unrecognized checkout refusals as `Provider` now receives
   `Checkout` with `code == UNKNOWN`.
+
+### Build
+
+- The RuStore SDK resolves from its current Maven host
+  (`nexus-external.vkteam.ru`); the previous host no longer serves it.
+- Server response fixtures are decoded by the released models in
+  `ServerContractDecodingTest`, so a server change that this SDK cannot read
+  fails the SDK build.
 
 ## 0.1.0-rc.17
 

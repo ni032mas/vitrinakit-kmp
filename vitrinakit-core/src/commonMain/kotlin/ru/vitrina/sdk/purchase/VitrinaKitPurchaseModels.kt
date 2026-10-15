@@ -4,9 +4,15 @@ package ru.vitrina.sdk.purchase
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import ru.vitrina.sdk.model.UnknownTolerantEnumSerializer
 import ru.vitrina.sdk.model.VitrinaKitProfile
 
-/** Purchase capability packaged by a provider adapter. */
+/**
+ * Purchase capability packaged by a provider adapter, or reported by the server for an attempt.
+ *
+ * SDK responses read a capability this SDK version does not recognize as [UNKNOWN] instead of
+ * failing. An attempt in a capability this build has no adapter for is never presented.
+ */
 @Serializable
 enum class VitrinaKitPurchaseCapability {
     /** Google Play Billing capability. */
@@ -16,9 +22,30 @@ enum class VitrinaKitPurchaseCapability {
     /** RuStore Pay capability. */
     @SerialName("rustore")
     RUSTORE,
+
+    /**
+     * YooKassa hosted checkout.
+     *
+     * The server reports it for attempts started through hosted checkout, for example when such
+     * an attempt is read back or ended. It is not a capability a native purchase adapter declares.
+     */
+    @SerialName("yookassa_hosted")
+    YOOKASSA_HOSTED,
+
+    /**
+     * A capability introduced by a newer VitrinaKit API that this SDK version does not recognize.
+     *
+     * It is not a capability a native purchase adapter declares.
+     */
+    @SerialName("unknown")
+    UNKNOWN,
 }
 
-/** Durable status of a provider-neutral purchase attempt. */
+/**
+ * Durable status of a provider-neutral purchase attempt.
+ *
+ * SDK responses read a status this SDK version does not recognize as [UNKNOWN] instead of failing.
+ */
 @Serializable
 enum class VitrinaKitPurchaseAttemptStatus {
     /** Attempt record was created. */
@@ -60,7 +87,30 @@ enum class VitrinaKitPurchaseAttemptStatus {
     /** Purchase was valid but existing access remains authoritative. */
     @SerialName("duplicate_coverage")
     DUPLICATE_COVERAGE,
+
+    /**
+     * A status introduced by a newer VitrinaKit API that this SDK version does not recognize.
+     *
+     * The SDK treats such an attempt as still open: it reports the purchase as pending and keeps
+     * it resumable rather than guessing that it succeeded, failed or was cancelled.
+     */
+    @SerialName("unknown")
+    UNKNOWN,
 }
+
+internal object VitrinaKitPurchaseCapabilitySerializer :
+    UnknownTolerantEnumSerializer<VitrinaKitPurchaseCapability>(
+        known = VitrinaKitPurchaseCapability.serializer(),
+        entries = VitrinaKitPurchaseCapability.entries,
+        unknown = VitrinaKitPurchaseCapability.UNKNOWN,
+    )
+
+internal object VitrinaKitPurchaseAttemptStatusSerializer :
+    UnknownTolerantEnumSerializer<VitrinaKitPurchaseAttemptStatus>(
+        known = VitrinaKitPurchaseAttemptStatus.serializer(),
+        entries = VitrinaKitPurchaseAttemptStatus.entries,
+        unknown = VitrinaKitPurchaseAttemptStatus.UNKNOWN,
+    )
 
 /** Stable purchase error code safe for application handling. */
 @Serializable
@@ -101,7 +151,13 @@ enum class VitrinaKitPurchaseErrorCode {
     @SerialName("invalid_request")
     INVALID_REQUEST,
 
-    /** Another purchase presentation is already active. */
+    /**
+     * Another purchase is already running.
+     *
+     * Either this SDK is already presenting one, or the server refused to start another because a
+     * purchase for the same subscriber and access is still open, possibly one started in another
+     * channel. It is a conflict, not a failure to reach the provider.
+     */
     @SerialName("purchase_in_progress")
     PURCHASE_IN_PROGRESS,
 

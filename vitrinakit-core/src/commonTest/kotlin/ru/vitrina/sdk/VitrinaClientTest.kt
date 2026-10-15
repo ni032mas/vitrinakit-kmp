@@ -2131,7 +2131,7 @@ class VitrinaClientTest {
         val auth = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusUnauthorized, errorJson)),
         ).fetchPaywall("main", externalUserId = "user-1", subscriberSession = null)
-        val provider = newClient(
+        val checkout = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusConflict, errorJson)),
         ).createCheckoutSession(
             request = checkoutSessionRequest(),
@@ -2144,12 +2144,15 @@ class VitrinaClientTest {
         ).refreshSubscriber(externalUserId = "user-1", subscriberSession = null)
 
         assertIs<VitrinaError.Auth>(assertIs<VitrinaResult.Failure>(auth).error)
-        assertIs<VitrinaError.Provider>(assertIs<VitrinaResult.Failure>(provider).error)
+        assertEquals(
+            VitrinaCheckoutErrorCode.UNKNOWN,
+            assertIs<VitrinaError.Checkout>(assertIs<VitrinaResult.Failure>(checkout).error).code,
+        )
         assertIs<VitrinaError.Subscription>(assertIs<VitrinaResult.Failure>(subscription).error)
     }
 
     @Test
-    fun unrecognizedCheckoutBadRequestSurfacesTheServerBodyInsteadOfANetworkError() = runTest {
+    fun unrecognizedCheckoutCodeIsAnUnknownCheckoutErrorCarryingTheServerBody() = runTest {
         val result = newClient(
             http = FakeHttpClient(response = VitrinaHttpResponse(HttpStatusBadRequest, errorJson)),
         ).createCheckoutSession(
@@ -2159,7 +2162,9 @@ class VitrinaClientTest {
             subscriberSession = null,
         )
 
-        val failure = assertIs<VitrinaError.Provider>(assertIs<VitrinaResult.Failure>(result).error)
+        val failure = assertIs<VitrinaError.Checkout>(assertIs<VitrinaResult.Failure>(result).error)
+        assertEquals(VitrinaCheckoutErrorCode.UNKNOWN, failure.code)
+        assertEquals("failed", failure.rawCode)
         assertEquals(errorJson, failure.message)
     }
 

@@ -151,7 +151,13 @@ enum class VitrinaKitPurchaseErrorCode {
     @SerialName("invalid_request")
     INVALID_REQUEST,
 
-    /** Another purchase presentation is already active. */
+    /**
+     * Another purchase is already running.
+     *
+     * Either this SDK is already presenting one, or the server refused to start another because a
+     * purchase for the same subscriber and access is still open, possibly one started in another
+     * channel. It is a conflict, not a failure to reach the provider.
+     */
     @SerialName("purchase_in_progress")
     PURCHASE_IN_PROGRESS,
 

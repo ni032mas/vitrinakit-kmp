@@ -577,10 +577,8 @@ internal class VitrinaClient(
         json.decodeFromJsonElement<VitrinaCheckoutErrorCode>(JsonPrimitive(rawCode))
     }.getOrDefault(VitrinaCheckoutErrorCode.UNKNOWN)
 
-    private fun checkoutErrorMessage(body: String): String {
-        val parsed = parseErrorBody(body = body)
-        return parsed?.get(MessageField)?.jsonPrimitive?.contentOrNull ?: body
-    }
+    private fun checkoutErrorMessage(body: String): String =
+        parseErrorBody(body = body)?.errorText(MessageField) ?: body
 
     private fun parseErrorBody(body: String): JsonObject? =
         runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()

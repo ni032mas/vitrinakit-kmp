@@ -33,7 +33,9 @@ the payment page.
 
 - `rawCode` on `VitrinaError.Checkout` and `VitrinaKitError.Checkout`: the
   checkout error code exactly as the API sent it. For `UNKNOWN` it is the only
-  place the server's code survives.
+  place the server's code survives. On the recommended `VitrinaKit.purchase()`
+  path the original code is not exposed yet: the hosted adapter reports only
+  the mapped `VitrinaKitPurchaseErrorCode` (tracked in #60).
 
 ### Changed
 
@@ -41,9 +43,10 @@ the payment page.
   `VitrinaCheckoutErrorCode`, `SubscriptionStatus`, `EntitlementSource`,
   `BillingIntervalUnit`, `VitrinaKitPurchaseAttemptStatus`, or
   `VitrinaKitPurchaseCapability`. Handle the new entries, or add `else`.
-- The `Checkout` errors' new `rawCode` parameter has a default, so code that
-  constructs them still compiles, but binaries built against an earlier release
-  must be recompiled.
+- The `Checkout` errors gain a `rawCode` constructor parameter with a default.
+  Kotlin source that constructs them still compiles; Swift callers must pass
+  `rawCode`, because the Objective-C export drops Kotlin default arguments; JVM
+  and native binaries built against an earlier release must be recompiled.
 - Code that caught unrecognized checkout refusals as `Provider` now receives
   `Checkout` with `code == UNKNOWN`.
 

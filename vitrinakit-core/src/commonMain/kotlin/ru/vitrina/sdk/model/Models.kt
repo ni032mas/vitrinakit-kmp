@@ -101,8 +101,8 @@ enum class SubscriptionStatus {
     /**
      * A status introduced by a newer VitrinaKit API that this SDK version does not recognize.
      *
-     * Decide access from the accompanying `hasAccess` flag, which the server computes, never from
-     * this value.
+     * Decide access from [SubscriberEntitlementState.hasAccess] and [SubscriberState.hasAccess],
+     * which the server computes, never from this value.
      */
     @SerialName("unknown")
     UNKNOWN,
@@ -726,7 +726,9 @@ sealed class VitrinaKitError {
          *
          * It equals the wire value of [code] for every recognized code. When [code] is
          * [VitrinaCheckoutErrorCode.UNKNOWN] this is the only place the server's code survives, so
-         * log it rather than dropping it.
+         * log it rather than dropping it. A hosted purchase through
+         * [ru.vitrina.sdk.VitrinaKit.purchase] reports only the mapped purchase error code, not
+         * this value.
          */
         val rawCode: String = code.wireCode,
     ) : VitrinaKitError()

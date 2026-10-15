@@ -91,6 +91,16 @@ class CheckoutErrorCodeMappingTest {
         }
     }
 
+    @Test
+    fun aMessageThatIsNotTextFallsBackToTheServerBodyInsteadOfThrowing() = runTest {
+        val body = """{"code":"purchase_in_progress","message":{"nested":true}}"""
+
+        val error = checkoutError(statusCode = HttpStatusConflict, body = body)
+
+        assertEquals(VitrinaCheckoutErrorCode.PURCHASE_IN_PROGRESS, error.code)
+        assertEquals(body, error.message)
+    }
+
     private suspend fun checkoutError(statusCode: Int, body: String): VitrinaError.Checkout =
         assertIs<VitrinaError.Checkout>(
             assertIs<VitrinaResult.Failure>(createCheckout(statusCode = statusCode, body = body)).error,

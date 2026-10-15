@@ -225,6 +225,7 @@ internal object ServerContractFixtures {
   "capability": "google_play",
   "currency": "RUB",
   "expires_at": "2026-10-14T12:15:00Z",
+  "intent": "purchase",
   "interval_count": 1,
   "interval_unit": "month",
   "presentation": {

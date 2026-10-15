@@ -35,7 +35,9 @@ import ru.vitrina.sdk.purchase.SubscriberScope
 import ru.vitrina.sdk.purchase.VitrinaKitProviderProof
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapterApi
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAttemptStatus
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAttemptStatusSerializer
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseCapability
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseCapabilitySerializer
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseError
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseErrorCode
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseInstruction
@@ -548,32 +550,35 @@ internal class VitrinaClient(
         HttpStatusForbidden,
         -> VitrinaError.Auth(body)
 
+        // Any refusal that names a code is a checkout outcome, including a code this SDK version
+        // does not know yet: reporting that as a provider failure would tell the app the payment
+        // page could not open when the server deliberately refused it. Only a refusal with no
+        // readable code stays a provider error.
         HttpStatusBadRequest,
         HttpStatusConflict,
-        -> checkoutErrorCode(body)?.let { code ->
+        -> checkoutRawCode(body)?.let { rawCode ->
             VitrinaError.Checkout(
-                code = code,
+                code = decodeCheckoutErrorCode(rawCode),
                 message = checkoutErrorMessage(body = body),
+                rawCode = rawCode,
             )
         } ?: VitrinaError.Provider(body)
 
         else -> VitrinaError.Network(body)
     }
 
-    private fun checkoutErrorCode(body: String): VitrinaCheckoutErrorCode? {
+    /** Problem Details carry the code in `code`; older checkout bodies carry it in `error`. */
+    private fun checkoutRawCode(body: String): String? {
         val parsed = parseErrorBody(body = body) ?: return null
-        val rawCode = parsed[ErrorCodeField]?.jsonPrimitive?.contentOrNull
-            ?: parsed[ErrorField]?.jsonPrimitive?.contentOrNull
-            ?: return null
-        return runCatching {
-            json.decodeFromJsonElement<VitrinaCheckoutErrorCode>(JsonPrimitive(rawCode))
-        }.getOrNull()
+        return parsed.errorText(ErrorCodeField) ?: parsed.errorText(ErrorField)
     }
 
-    private fun checkoutErrorMessage(body: String): String {
-        val parsed = parseErrorBody(body = body)
-        return parsed?.get(MessageField)?.jsonPrimitive?.contentOrNull ?: body
-    }
+    private fun decodeCheckoutErrorCode(rawCode: String): VitrinaCheckoutErrorCode = runCatching {
+        json.decodeFromJsonElement<VitrinaCheckoutErrorCode>(JsonPrimitive(rawCode))
+    }.getOrDefault(VitrinaCheckoutErrorCode.UNKNOWN)
+
+    private fun checkoutErrorMessage(body: String): String =
+        parseErrorBody(body = body)?.errorText(MessageField) ?: body
 
     private fun parseErrorBody(body: String): JsonObject? =
         runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
@@ -783,6 +788,9 @@ private fun VitrinaKitPurchaseAttemptStatus.isTerminalPurchaseStatus(): Boolean 
     VitrinaKitPurchaseAttemptStatus.PROOF_RECEIVED,
     VitrinaKitPurchaseAttemptStatus.VALIDATING,
     VitrinaKitPurchaseAttemptStatus.PENDING,
+    // A status this SDK version cannot read may still be an open purchase; forgetting the attempt
+    // would lose the only way to resume it.
+    VitrinaKitPurchaseAttemptStatus.UNKNOWN,
     -> false
 }
 
@@ -849,10 +857,12 @@ private data class PurchasePresentationResponse(
 @Serializable
 private data class PurchaseAttemptResponse(
     val reference: String,
+    @Serializable(with = VitrinaKitPurchaseAttemptStatusSerializer::class)
     val status: VitrinaKitPurchaseAttemptStatus,
     val reason: String? = null,
     @SerialName("expires_at")
     val expiresAt: String,
+    @Serializable(with = VitrinaKitPurchaseCapabilitySerializer::class)
     val capability: VitrinaKitPurchaseCapability,
     val presentation: PurchasePresentationResponse,
 )
@@ -908,6 +918,7 @@ private data class RestorePurchaseProofRequest(
 @Serializable
 private data class RestoredPurchaseWire(
     val reference: String,
+    @Serializable(with = VitrinaKitPurchaseAttemptStatusSerializer::class)
     val status: VitrinaKitPurchaseAttemptStatus,
     val replayed: Boolean,
 )

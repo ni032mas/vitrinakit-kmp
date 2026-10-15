@@ -125,6 +125,13 @@ when (val result = VitrinaKit.purchase(selectedProduct)) {
 `ACTIVE_ENTITLEMENT_EXISTS` reach `purchase()` the same way, each as its own
 code with the server's explanatory message attached.
 
+`PURCHASE_IN_PROGRESS` also reaches `purchase()` as its own code. It means
+another purchase for the subscriber is still running, possibly one started in
+another channel: show it as a conflict rather than a failure to open the
+payment page, and refresh the profile. Branch on the code, not on the message
+text. A refusal code this SDK version does not recognize arrives as `UNKNOWN`
+instead of an adapter failure.
+
 On iOS, build the hosted binary with:
 
 ```bash

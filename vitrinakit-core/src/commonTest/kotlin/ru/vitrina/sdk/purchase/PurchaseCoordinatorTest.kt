@@ -134,6 +134,38 @@ class PurchaseCoordinatorTest {
     }
 
     @Test
+    fun anUnrecognizedServerStatusKeepsThePurchasePendingInsteadOfGuessingAnOutcome() = runTest {
+        val api = FakePurchaseApi(
+            confirmResult = PurchaseApiResult.Success(
+                PurchaseConfirmation(
+                    attempt = attempt(status = VitrinaKitPurchaseAttemptStatus.PENDING),
+                    pending = true,
+                    profile = null,
+                ),
+            ),
+            getResult = PurchaseApiResult.Success(
+                attempt(status = VitrinaKitPurchaseAttemptStatus.UNKNOWN),
+            ),
+        )
+        val adapter = FakePurchaseAdapter(
+            presentResult = VitrinaKitAdapterPurchaseResult.ProofReady(VitrinaKitProviderProof("proof")),
+        )
+        val cache = SubscriberCache()
+        val coordinator = coordinator(api = api, adapter = adapter, cache = cache)
+
+        assertIs<VitrinaKitPurchaseResult.Pending>(coordinator.purchase(trustedScope(), product()))
+        val retried = coordinator.purchase(trustedScope(), product())
+        val foreground = coordinator.onForeground(scope = trustedScope(), expectedCacheGeneration = 0)
+
+        assertEquals("attempt-1", assertIs<VitrinaKitPurchaseResult.Pending>(retried).attemptReference)
+        assertEquals("attempt-1", assertIs<VitrinaKitPurchaseResult.Pending>(foreground).attemptReference)
+        assertEquals(2, api.getCount)
+        assertEquals(1, adapter.presentCount)
+        assertEquals(1, api.confirmCount)
+        assertEquals("attempt-1", cache.resume(cacheKey())?.attemptReference)
+    }
+
+    @Test
     fun retryableConfirmationFailurePersistsAttemptAndRecoversWithoutPresentingAgain() = runTest {
         val api = FakePurchaseApi(
             confirmResult = PurchaseApiResult.Failure(

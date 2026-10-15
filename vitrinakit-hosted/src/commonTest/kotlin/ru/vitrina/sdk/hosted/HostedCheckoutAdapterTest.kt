@@ -152,6 +152,16 @@ class HostedCheckoutAdapterTest {
                 VitrinaKitPurchaseErrorCode.EMAIL_VERIFICATION_REQUIRED,
                 "A verified email is required before checkout.",
             ),
+            Triple(
+                VitrinaCheckoutErrorCode.PURCHASE_IN_PROGRESS,
+                VitrinaKitPurchaseErrorCode.PURCHASE_IN_PROGRESS,
+                "A purchase is already in progress for this subscriber and product.",
+            ),
+            Triple(
+                VitrinaCheckoutErrorCode.UNKNOWN,
+                VitrinaKitPurchaseErrorCode.UNKNOWN,
+                "The checkout was refused.",
+            ),
         )
         val adapter = HostedCheckoutAdapter(hostedConfiguration())
 
@@ -166,6 +176,54 @@ class HostedCheckoutAdapterTest {
             assertEquals(purchaseCode, failure.error.code)
             assertEquals(serverMessage, failure.error.message)
         }
+    }
+
+    @Test
+    fun aPurchaseAlreadyInProgressOnTheServerIsAConflictAndNoBrowserOpens() = runTest {
+        val (failure, launches) = purchaseRefusedByServer(code = "purchase_in_progress")
+
+        assertEquals(VitrinaKitPurchaseErrorCode.PURCHASE_IN_PROGRESS, failure.error.code)
+        assertEquals(0, launches)
+    }
+
+    @Test
+    fun anUnrecognizedServerRefusalIsUnknownRatherThanAnAdapterFailure() = runTest {
+        val (failure, launches) = purchaseRefusedByServer(code = "future_checkout_code")
+
+        assertEquals(VitrinaKitPurchaseErrorCode.UNKNOWN, failure.error.code)
+        assertEquals(0, launches)
+    }
+
+    /** Drives a facade purchase whose checkout the server refuses with [code] as Problem Details. */
+    private suspend fun purchaseRefusedByServer(code: String): Pair<VitrinaKitPurchaseResult.Failure, Int> {
+        var launches = 0
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher {
+                    launches += 1
+                    HostedCheckoutLauncherSignal.Dismissed
+                },
+            ),
+        )
+        val refusal = VitrinaHttpResponse(
+            409,
+            """{"type":"https://api.vitrinakit.ru/problems/$code","title":"Checkout refused","status":409,""" +
+                """"detail":"The checkout was refused.","instance":"/api/v1/checkout/sessions",""" +
+                """"code":"$code","request_id":"request-1"}""",
+        )
+        assertIs<VitrinaKitResult.Success<Unit>>(
+            VitrinaKit.activate(
+                VitrinaKitConfig.Builder("pk_public_test")
+                    .withHttpClient(HostedFacadeHttpClient(checkoutResponse = refusal))
+                    .withHostedCheckoutAdapter(adapter)
+                    .build(),
+            ),
+        )
+        assertIs<VitrinaKitResult.Success<*>>(VitrinaKit.setSubscriberSession("opaque-session"))
+        val paywall = assertIs<VitrinaKitResult.Success<*>>(VitrinaKit.getPaywall("main"))
+        val product = (paywall.value as ru.vitrina.sdk.model.VitrinaKitPaywall).products.single()
+
+        return assertIs<VitrinaKitPurchaseResult.Failure>(VitrinaKit.purchase(product)) to launches
     }
 
     @Test
@@ -941,6 +999,7 @@ private class RecordingResumeStateStore : HostedCheckoutResumeStateStore {
 
 private class HostedFacadeHttpClient(
     private val authoritativeProfileJson: String = ActiveProfileJson,
+    private val checkoutResponse: VitrinaHttpResponse = VitrinaHttpResponse(201, CheckoutJson),
 ) : VitrinaHttpClient {
     val requests = mutableListOf<VitrinaHttpRequest>()
     private var profileRequests = 0
@@ -953,7 +1012,7 @@ private class HostedFacadeHttpClient(
                 VitrinaHttpResponse(200, if (profileRequests == 1) InactiveProfileJson else authoritativeProfileJson)
             }
             "/api/v1/paywall/main" -> VitrinaHttpResponse(200, PaywallJson)
-            "/api/v1/checkout/sessions" -> VitrinaHttpResponse(201, CheckoutJson)
+            "/api/v1/checkout/sessions" -> checkoutResponse
             else -> error("Unexpected request path: ${request.path}")
         }
     }

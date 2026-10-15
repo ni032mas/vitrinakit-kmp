@@ -1,5 +1,63 @@
 # VitrinaKit KMP SDK Changelog
 
+## 0.1.0-rc.18
+
+Forward-compatibility fix. One value the API introduced after an SDK release
+failed the whole response it arrived in, and a checkout the server refused
+because another purchase was still running reached apps as a failure to open
+the payment page.
+
+### Fixed
+
+- `409 purchase_in_progress` from `POST /api/v1/checkout/sessions` maps to the
+  new `VitrinaCheckoutErrorCode.PURCHASE_IN_PROGRESS`. Through the hosted
+  adapter, `VitrinaKit.purchase()` reports it as
+  `VitrinaKitPurchaseErrorCode.PURCHASE_IN_PROGRESS` instead of
+  `ADAPTER_FAILURE`, and no browser opens.
+- A checkout refusal whose code this SDK version does not recognize is a
+  checkout error with the new `VitrinaCheckoutErrorCode.UNKNOWN` (hosted
+  purchase: `VitrinaKitPurchaseErrorCode.UNKNOWN`) instead of a generic
+  `Provider` error. Only a refusal with no readable code stays `Provider`.
+- `SubscriptionStatus`, `EntitlementSource`, `BillingIntervalUnit`,
+  `VitrinaKitPurchaseAttemptStatus`, and `VitrinaKitPurchaseCapability` each
+  gain `UNKNOWN`. A value this SDK version does not recognize decodes as
+  `UNKNOWN` instead of failing the profile, paywall, purchase attempt, or
+  restore response it arrived in. Known values and encoding are unchanged.
+- `VitrinaKitPurchaseCapability.YOOKASSA_HOSTED` reads the capability the API
+  reports for hosted checkout attempts. Ending an abandoned hosted checkout now
+  reads the server's answer instead of discarding it as undecodable.
+- An attempt in an `UNKNOWN` status stays pending and resumable. The SDK never
+  reports it as succeeded, failed, or cancelled.
+
+### Added
+
+- `rawCode` on `VitrinaError.Checkout` and `VitrinaKitError.Checkout`: the
+  checkout error code exactly as the API sent it. For `UNKNOWN` it is the only
+  place the server's code survives. On the recommended `VitrinaKit.purchase()`
+  path the original code is not exposed yet: the hosted adapter reports only
+  the mapped `VitrinaKitPurchaseErrorCode` (tracked in #60).
+
+### Changed
+
+- New enum entries can break an exhaustive `when` without an `else` branch over
+  `VitrinaCheckoutErrorCode`, `SubscriptionStatus`, `EntitlementSource`,
+  `BillingIntervalUnit`, `VitrinaKitPurchaseAttemptStatus`, or
+  `VitrinaKitPurchaseCapability`. Handle the new entries, or add `else`.
+- The `Checkout` errors gain a `rawCode` constructor parameter with a default.
+  Kotlin source that constructs them still compiles; Swift callers must pass
+  `rawCode`, because the Objective-C export drops Kotlin default arguments; JVM
+  and native binaries built against an earlier release must be recompiled.
+- Code that caught unrecognized checkout refusals as `Provider` now receives
+  `Checkout` with `code == UNKNOWN`.
+
+### Build
+
+- The RuStore SDK resolves from its current Maven host
+  (`nexus-external.vkteam.ru`); the previous host no longer serves it.
+- Server response fixtures are decoded by the released models in
+  `ServerContractDecodingTest`, so a server change that this SDK cannot read
+  fails the SDK build.
+
 ## 0.1.0-rc.17
 
 Decoding fix. A subscriber whose card summary the platform never captured — a

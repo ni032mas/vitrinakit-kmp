@@ -238,4 +238,17 @@ internal object ServerContractFixtures {
   "status": "pending"
 }
 """
+
+    const val CHECKOUT_SESSION_HOSTED = """
+{
+  "confirmation_url": "https://pay.test",
+  "expires_at": "2026-12-31T18:00:00Z",
+  "id": "00000000-0000-4000-8000-000000000001",
+  "payment_id": "00000000-0000-4000-8000-000000000002",
+  "provider_payment_id": "pay_1",
+  "purchase_attempt_reference": "33333333-3333-3333-3333-333333333333",
+  "reused": false,
+  "status": "pending"
+}
+"""
 }

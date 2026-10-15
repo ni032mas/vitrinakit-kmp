@@ -9,6 +9,8 @@ import ru.vitrina.sdk.cache.SubscriberCacheKey
 import ru.vitrina.sdk.http.VitrinaHttpClient
 import ru.vitrina.sdk.http.VitrinaHttpRequest
 import ru.vitrina.sdk.http.VitrinaHttpResponse
+import ru.vitrina.sdk.CheckoutSessionRequest
+import ru.vitrina.sdk.model.CheckoutSession
 import ru.vitrina.sdk.model.Paywall
 import ru.vitrina.sdk.model.SubscriberState
 import ru.vitrina.sdk.model.SubscriptionStatus
@@ -120,6 +122,29 @@ class ServerContractDecodingTest {
 
         assertEquals(VitrinaKitPurchaseAttemptStatus.PENDING, attempt.status)
         assertEquals(VitrinaKitPurchaseCapability.GOOGLE_PLAY, attempt.capability)
+    }
+
+    @Test
+    fun hostedCheckoutSessionDecodes() = runTest {
+        val session = assertIs<VitrinaResult.Success<CheckoutSession>>(
+            client(ServerContractFixtures.CHECKOUT_SESSION_HOSTED, statusCode = CREATED).createCheckoutSession(
+                request = CheckoutSessionRequest(
+                    placementKey = "main",
+                    productReference = "premium_monthly",
+                    returnUrl = "app://return",
+                ),
+                externalUserId = "customer-1",
+                subscriberSession = null,
+                idempotencyKey = "key-1",
+            ),
+        ).value
+
+        assertEquals("https://pay.test", session.confirmationUrl)
+        assertEquals("33333333-3333-3333-3333-333333333333", session.purchaseAttemptReference)
+        assertEquals("pending", session.status)
+        assertEquals("pay_1", session.providerPaymentId)
+        assertEquals("2026-12-31T18:00:00Z", session.expiresAt)
+        assertFalse(session.reused)
     }
 
     private suspend fun subscriber(body: String): SubscriberState = assertIs<VitrinaResult.Success<SubscriberState>>(

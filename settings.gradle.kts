@@ -16,7 +16,7 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven {
-            url = uri("https://artifactory-external.vkpartner.ru/artifactory/maven-rustore-exposed/")
+            url = uri("https://nexus-external.vkteam.ru/repository/maven-rustore-exposed/")
         }
     }
 }

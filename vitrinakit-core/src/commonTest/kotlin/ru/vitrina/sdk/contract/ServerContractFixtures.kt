@@ -239,6 +239,29 @@ internal object ServerContractFixtures {
 }
 """
 
+    /** A hosted checkout attempt as read back after the buyer abandoned it and the client ended it. */
+    const val PURCHASE_ATTEMPT_VIEW_HOSTED_CANCELLED = """
+{
+  "amount_minor": 29900,
+  "billing_mode": "recurring",
+  "blocking_until": "2026-10-14T12:15:00Z",
+  "capability": "yookassa_hosted",
+  "currency": "RUB",
+  "expires_at": "2026-10-14T12:15:00Z",
+  "intent": "purchase",
+  "interval_count": 1,
+  "interval_unit": "month",
+  "presentation": {
+    "account_binding": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "package_name": "",
+    "product_id": ""
+  },
+  "reason": "client_cancelled",
+  "reference": "33333333-3333-3333-3333-333333333333",
+  "status": "cancelled"
+}
+"""
+
     const val CHECKOUT_SESSION_HOSTED = """
 {
   "confirmation_url": "https://pay.test",

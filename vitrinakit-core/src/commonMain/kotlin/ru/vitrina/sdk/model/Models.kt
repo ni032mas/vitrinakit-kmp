@@ -20,6 +20,8 @@ enum class VitrinaEnvironment {
 
 /**
  * Billing interval unit for recurring and lifetime prices.
+ *
+ * SDK responses read a unit this SDK version does not recognize as [UNKNOWN] instead of failing.
  */
 @Serializable
 enum class BillingIntervalUnit {
@@ -38,10 +40,21 @@ enum class BillingIntervalUnit {
     /** One-time lifetime access interval. */
     @SerialName("lifetime")
     LIFETIME,
+
+    /**
+     * A unit introduced by a newer VitrinaKit API that this SDK version does not recognize.
+     *
+     * The rest of the paywall still decodes. Describe the price without its period rather than
+     * guessing one.
+     */
+    @SerialName("unknown")
+    UNKNOWN,
 }
 
 /**
  * Normalized subscription lifecycle status exposed by VitrinaKit.
+ *
+ * SDK responses read a status this SDK version does not recognize as [UNKNOWN] instead of failing.
  */
 @Serializable
 enum class SubscriptionStatus {
@@ -84,6 +97,15 @@ enum class SubscriptionStatus {
     /** Subscription access was revoked. */
     @SerialName("revoked")
     REVOKED,
+
+    /**
+     * A status introduced by a newer VitrinaKit API that this SDK version does not recognize.
+     *
+     * Decide access from the accompanying `hasAccess` flag, which the server computes, never from
+     * this value.
+     */
+    @SerialName("unknown")
+    UNKNOWN,
 }
 
 /**
@@ -150,12 +172,14 @@ data class PaywallProduct(
     val currency: String,
     /** Billing interval unit. */
     @SerialName("interval_unit")
+    @Serializable(with = BillingIntervalUnitSerializer::class)
     val intervalUnit: BillingIntervalUnit,
     /** Number of interval units per billing period. */
     @SerialName("interval_count")
     val intervalCount: Int,
     /** Optional trial interval unit. */
     @SerialName("trial_interval_unit")
+    @Serializable(with = BillingIntervalUnitSerializer::class)
     val trialIntervalUnit: BillingIntervalUnit? = null,
     /** Number of trial interval units. */
     @SerialName("trial_interval_count")
@@ -228,6 +252,8 @@ data class CheckoutSession(
 
 /**
  * Provider or store source for subscriber access state.
+ *
+ * SDK responses read a source this SDK version does not recognize as [UNKNOWN] instead of failing.
  */
 @Serializable
 enum class EntitlementSource {
@@ -246,6 +272,14 @@ enum class EntitlementSource {
     /** YooKassa hosted checkout source. */
     @SerialName("yookassa")
     YOOKASSA,
+
+    /**
+     * A source introduced by a newer VitrinaKit API that this SDK version does not recognize.
+     *
+     * The access the entitlement grants is unaffected; only where it came from is unknown here.
+     */
+    @SerialName("unknown")
+    UNKNOWN,
 }
 
 /**
@@ -266,6 +300,7 @@ data class SubscriberEntitlementState(
     /** Stable entitlement key used by the integrating app. */
     val key: String,
     /** Current subscription status backing this entitlement. */
+    @Serializable(with = SubscriptionStatusSerializer::class)
     val status: SubscriptionStatus,
     /** Whether this entitlement currently grants access. */
     @SerialName("has_access")
@@ -280,6 +315,7 @@ data class SubscriberEntitlementState(
     @SerialName("product_key")
     val productKey: String? = null,
     /** Provider or store source for this access state. */
+    @Serializable(with = EntitlementSourceSerializer::class)
     val source: EntitlementSource,
     /** Whether provider-side renewal is enabled. */
     @SerialName("auto_renew_enabled")
@@ -326,6 +362,7 @@ data class SubscriberPaymentMethod(
 @Serializable
 data class SubscriberSubscription(
     /** Current subscription status. */
+    @Serializable(with = SubscriptionStatusSerializer::class)
     val status: SubscriptionStatus,
     /** End of the paid period in ISO-8601 UTC format. Access lasts until this moment. */
     @SerialName("current_period_end")
@@ -497,12 +534,20 @@ sealed class VitrinaError {
      *
      * @property code Public checkout error code returned by the API.
      * @property message Error message returned by the SDK or API.
+     * @property rawCode Checkout error code exactly as the API sent it.
      */
     data class Checkout(
         /** Public checkout error code returned by the API. */
         val code: VitrinaCheckoutErrorCode,
         /** Error message returned by the SDK or API. */
         val message: String,
+        /**
+         * Checkout error code exactly as the API sent it.
+         *
+         * It equals the wire value of [code] for every recognized code. When [code] is
+         * [VitrinaCheckoutErrorCode.UNKNOWN] this is the only place the server's code survives.
+         */
+        val rawCode: String = code.wireCode,
     ) : VitrinaError()
 
     /**
@@ -528,6 +573,9 @@ sealed class VitrinaError {
 
 /**
  * Public checkout error codes that consumer apps can handle explicitly.
+ *
+ * A code this SDK version does not recognize arrives as [UNKNOWN], with the server's own code kept
+ * in [VitrinaKitError.Checkout.rawCode].
  */
 @Serializable
 enum class VitrinaCheckoutErrorCode {
@@ -546,7 +594,31 @@ enum class VitrinaCheckoutErrorCode {
     /** Checkout requires a verified email before it can proceed. */
     @SerialName("email_verification_required")
     EMAIL_VERIFICATION_REQUIRED,
+
+    /**
+     * Another purchase for this subscriber and access is already running, so no new checkout was
+     * created.
+     *
+     * It is a conflict, not a transport failure, and nothing was charged by this request. Refresh
+     * the subscriber profile; a new purchase becomes possible once the running one finishes or
+     * expires.
+     */
+    @SerialName("purchase_in_progress")
+    PURCHASE_IN_PROGRESS,
+
+    /**
+     * A checkout error code that this SDK version does not recognize.
+     *
+     * The refusal still arrives as a checkout error rather than a generic provider failure. The
+     * server's own code is in [VitrinaKitError.Checkout.rawCode].
+     */
+    @SerialName("unknown")
+    UNKNOWN,
 }
+
+/** Wire value of this code, exactly as the `@SerialName` of its entry declares it. */
+internal val VitrinaCheckoutErrorCode.wireCode: String
+    get() = VitrinaCheckoutErrorCode.serializer().descriptor.getElementName(ordinal)
 
 /** VitrinaKit SDK environment alias used by the public facade. */
 typealias VitrinaKitEnvironment = VitrinaEnvironment
@@ -642,12 +714,21 @@ sealed class VitrinaKitError {
      *
      * @property code Public checkout error code returned by the API.
      * @property message Error message returned by the SDK or API.
+     * @property rawCode Checkout error code exactly as the API sent it.
      */
     data class Checkout(
         /** Public checkout error code returned by the API. */
         val code: VitrinaCheckoutErrorCode,
         /** Error message returned by the SDK or API. */
         val message: String,
+        /**
+         * Checkout error code exactly as the API sent it.
+         *
+         * It equals the wire value of [code] for every recognized code. When [code] is
+         * [VitrinaCheckoutErrorCode.UNKNOWN] this is the only place the server's code survives, so
+         * log it rather than dropping it.
+         */
+        val rawCode: String = code.wireCode,
     ) : VitrinaKitError()
 
     /**

@@ -563,6 +563,9 @@ internal class PurchaseCoordinator(
             VitrinaKitPurchaseAttemptStatus.PROOF_RECEIVED,
             VitrinaKitPurchaseAttemptStatus.VALIDATING,
             VitrinaKitPurchaseAttemptStatus.PENDING,
+            // A status this SDK version cannot read is not evidence of any outcome. Keep the
+            // purchase pending and resumable instead of reporting success, failure or cancellation.
+            VitrinaKitPurchaseAttemptStatus.UNKNOWN,
             -> VitrinaKitPurchaseResult.Pending(
                 attemptReference = attempt.reference,
                 profile = cache.profile(key = scope.cacheKey),
@@ -727,6 +730,9 @@ internal class PurchaseCoordinator(
             VitrinaKitPurchaseAttemptStatus.PROOF_RECEIVED,
             VitrinaKitPurchaseAttemptStatus.VALIDATING,
             VitrinaKitPurchaseAttemptStatus.PENDING,
+            // A status this SDK version cannot read is not evidence of any outcome. Keep the
+            // purchase pending and resumable instead of reporting success, failure or cancellation.
+            VitrinaKitPurchaseAttemptStatus.UNKNOWN,
             -> VitrinaKitPurchaseResult.Pending(
                 attemptReference = attempt.reference,
                 profile = cache.profile(key = scope.cacheKey),

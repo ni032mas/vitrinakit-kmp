@@ -1550,7 +1550,11 @@ private fun ru.vitrina.sdk.model.VitrinaError.toKitError(): VitrinaKitError = wh
     is ru.vitrina.sdk.model.VitrinaError.Auth -> VitrinaKitError.Auth(message)
     is ru.vitrina.sdk.model.VitrinaError.Network -> VitrinaKitError.Network(message)
     is ru.vitrina.sdk.model.VitrinaError.Provider -> VitrinaKitError.Provider(message)
-    is ru.vitrina.sdk.model.VitrinaError.Checkout -> VitrinaKitError.Checkout(code = code, message = message)
+    is ru.vitrina.sdk.model.VitrinaError.Checkout -> VitrinaKitError.Checkout(
+        code = code,
+        message = message,
+        rawCode = rawCode,
+    )
     is ru.vitrina.sdk.model.VitrinaError.Configuration -> VitrinaKitError.Configuration(message)
     is ru.vitrina.sdk.model.VitrinaError.Subscription -> VitrinaKitError.Subscription(message)
 }

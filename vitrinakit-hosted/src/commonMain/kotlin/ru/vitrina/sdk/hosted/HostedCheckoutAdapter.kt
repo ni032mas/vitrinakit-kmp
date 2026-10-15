@@ -304,6 +304,8 @@ private fun VitrinaCheckoutErrorCode.toPurchaseErrorCode(): VitrinaKitPurchaseEr
     VitrinaCheckoutErrorCode.INVALID_RECEIPT_EMAIL -> VitrinaKitPurchaseErrorCode.INVALID_RECEIPT_EMAIL
     VitrinaCheckoutErrorCode.ACTIVE_SUBSCRIPTION_EXISTS -> VitrinaKitPurchaseErrorCode.ACTIVE_ENTITLEMENT_EXISTS
     VitrinaCheckoutErrorCode.EMAIL_VERIFICATION_REQUIRED -> VitrinaKitPurchaseErrorCode.EMAIL_VERIFICATION_REQUIRED
+    VitrinaCheckoutErrorCode.PURCHASE_IN_PROGRESS -> VitrinaKitPurchaseErrorCode.PURCHASE_IN_PROGRESS
+    VitrinaCheckoutErrorCode.UNKNOWN -> VitrinaKitPurchaseErrorCode.UNKNOWN
 }
 
 private fun purchaseFailure(

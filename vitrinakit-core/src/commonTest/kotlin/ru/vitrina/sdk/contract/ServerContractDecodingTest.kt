@@ -125,6 +125,30 @@ class ServerContractDecodingTest {
     }
 
     @Test
+    fun hostedAttemptViewDecodesOnReadAndOnCancel() = runTest {
+        val reference = "33333333-3333-3333-3333-333333333333"
+        val body = ServerContractFixtures.PURCHASE_ATTEMPT_VIEW_HOSTED_CANCELLED
+        val read = assertIs<PurchaseApiResult.Success<PurchaseAttempt>>(
+            client(body).getPurchase(scope = scope(), attemptReference = reference),
+        ).value
+        val cancelled = assertIs<PurchaseApiResult.Success<PurchaseAttempt>>(
+            client(body).cancelPurchase(
+                externalUserId = null,
+                subscriberSession = "opaque-session",
+                attemptReference = reference,
+                idempotencyKey = "key-1",
+            ),
+        ).value
+
+        listOf(read, cancelled).forEach { attempt ->
+            assertEquals(reference, attempt.reference)
+            assertEquals(VitrinaKitPurchaseCapability.YOOKASSA_HOSTED, attempt.capability)
+            assertEquals(VitrinaKitPurchaseAttemptStatus.CANCELLED, attempt.status)
+            assertEquals("client_cancelled", attempt.reason)
+        }
+    }
+
+    @Test
     fun hostedCheckoutSessionDecodes() = runTest {
         val session = assertIs<VitrinaResult.Success<CheckoutSession>>(
             client(ServerContractFixtures.CHECKOUT_SESSION_HOSTED, statusCode = CREATED).createCheckoutSession(

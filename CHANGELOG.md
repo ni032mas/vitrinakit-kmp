@@ -1,5 +1,17 @@
 # VitrinaKit KMP SDK Changelog
 
+## Unreleased
+
+### Fixed
+
+- A hosted checkout the buyer closed before the profile showed access is
+  reported as `Cancelled` only when
+  `POST /api/v1/purchase-attempts/{reference}/cancel` confirms the attempt was
+  cancelled. When the server answers that it succeeded or is still resolving,
+  `VitrinaKit.purchase()` refreshes the profile once more and returns `Success`
+  if it grants access, otherwise `Pending`. A failed cancel request is also
+  `Pending`, not `Cancelled`.
+
 ## 0.1.0-rc.18
 
 Forward-compatibility fix. One value the API introduced after an SDK release

@@ -147,8 +147,13 @@ class HostedCheckoutAdapter(
                     profile = profile,
                 )
             }
-            endAbandonedCheckout(request = request, attemptReference = checkout.purchaseAttemptReference)
-            return VitrinaKitPurchaseResult.Cancelled
+            // No access yet does not mean the buyer did not pay: the provider's notification may
+            // simply not have reached the server. The server's answer to the cancel decides.
+            return endAbandonedCheckout(
+                request = request,
+                attemptReference = checkout.purchaseAttemptReference,
+                dismissedProfile = profile,
+            )
         }
         var lastProfile: VitrinaKitProfile? = null
         repeat(configuration.pollingPolicy.maxRefreshAttempts) { attemptIndex ->
@@ -171,7 +176,8 @@ class HostedCheckoutAdapter(
         // Deliberately no cancellation here. An exhausted poll loop means the outcome is
         // unknown — the browser may still be open, or a resumed checkout may still be in
         // flight — and ending the attempt on "unknown" would take the purchase away from a
-        // buyer who is still making it. Only a deterministic dismissal cancels.
+        // buyer who is still making it. Only a deterministic dismissal asks the server to end the
+        // attempt, and even then the server's answer decides whether it was cancelled.
         return VitrinaKitPurchaseResult.Pending(
             attemptReference = checkout.purchaseAttemptReference,
             profile = lastProfile,
@@ -179,20 +185,54 @@ class HostedCheckoutAdapter(
     }
 
     /**
-     * Asks the server to end an abandoned checkout.
+     * Asks the server to end a checkout the buyer dismissed, and reports what the server says
+     * happened to it.
      *
-     * The buyer closed the browser without paying, so the attempt should not keep holding their
-     * next purchase until it expires. The server owns what happens to the payment itself: it
-     * refuses to cancel one that already succeeded and reconciles it instead. A failure here is
-     * deliberately silent — the local reading of the purchase stands rather than being replaced by
-     * a cancellation that may not have happened.
+     * The buyer closed the browser before the profile showed access, so the attempt should not
+     * keep holding their next purchase until it expires. The cancel is not a blind one: the server
+     * answers with the attempt's current state, and a provider payment that already succeeded is
+     * applied instead of cancelled. The answer therefore decides the result:
+     * - the server confirmed the cancellation: [VitrinaKitPurchaseResult.Cancelled];
+     * - the server answered without confirming one, because the payment succeeded or is still
+     *   being resolved: one more profile refresh decides. Access for the purchased product is
+     *   [VitrinaKitPurchaseResult.Success]; anything else, a failed refresh included, is
+     *   [VitrinaKitPurchaseResult.Pending] on [attemptReference], never a failure for a purchase
+     *   that is likely paid;
+     * - the cancel call itself failed: [VitrinaKitPurchaseResult.Pending] with [dismissedProfile],
+     *   never a cancellation that may not have happened.
+     *
+     * Coroutine cancellation is always rethrown.
      */
     private suspend fun endAbandonedCheckout(
         request: VitrinaKitHostedPurchaseRequest,
         attemptReference: String,
-    ) {
-        runCatching { request.cancel.cancel(attemptReference = attemptReference) }
-            .onFailure { throwable -> if (throwable is CancellationException) throw throwable }
+        dismissedProfile: VitrinaKitProfile,
+    ): VitrinaKitPurchaseResult {
+        val unresolved = VitrinaKitPurchaseResult.Pending(
+            attemptReference = attemptReference,
+            profile = dismissedProfile,
+        )
+        val cancellation = runCatching { request.cancel.cancel(attemptReference = attemptReference) }
+            .getOrElse { throwable ->
+                if (throwable is CancellationException) throw throwable
+                return unresolved
+            }
+        val confirmed = when (cancellation) {
+            is VitrinaKitResult.Success -> cancellation.value.cancelled
+            is VitrinaKitResult.Failure -> return unresolved
+        }
+        if (confirmed) {
+            return VitrinaKitPurchaseResult.Cancelled
+        }
+        val profile = when (val refreshed = request.profile.refresh()) {
+            is VitrinaKitResult.Success -> refreshed.value
+            is VitrinaKitResult.Failure -> return unresolved
+        }
+        return if (profile.grantsAccessFor(request = request)) {
+            VitrinaKitPurchaseResult.Success(purchaseReference = attemptReference, profile = profile)
+        } else {
+            VitrinaKitPurchaseResult.Pending(attemptReference = attemptReference, profile = profile)
+        }
     }
 
     /** Refreshes the bound subscriber because hosted checkout has no device-store restore proof. */

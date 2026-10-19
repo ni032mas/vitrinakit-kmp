@@ -40,6 +40,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
@@ -375,24 +376,168 @@ class HostedCheckoutAdapterTest {
     }
 
     @Test
-    fun aFailedCancelNeverChangesTheDismissalOutcome() = runTest {
+    fun aFailedCancelReportsTheDismissalAsPendingRatherThanCancelled() = runTest {
         for (cancel in listOf(
             RecordingCancelOperation(
                 outcome = VitrinaKitResult.Failure(VitrinaKitError.Network("Network request failed.")),
             ),
             RecordingCancelOperation(failure = IllegalStateException("transport exploded")),
         )) {
+            val dismissedProfile = inactiveProfile()
+            var refreshCalls = 0
             val adapter = HostedCheckoutAdapter(
                 hostedConfiguration(
                     launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
                 ),
             )
 
-            val result = adapter.purchase(hostedRequest(cancel = cancel))
+            val result = adapter.purchase(
+                hostedRequest(
+                    profile = {
+                        refreshCalls += 1
+                        dismissedProfile
+                    },
+                    cancel = cancel,
+                ),
+            )
 
-            assertIs<VitrinaKitPurchaseResult.Cancelled>(result)
+            val pending = assertIs<VitrinaKitPurchaseResult.Pending>(result)
+            assertEquals("attempt-1", pending.attemptReference)
+            assertSame(dismissedProfile, pending.profile)
             assertEquals(1, cancel.calls)
+            assertEquals(1, refreshCalls)
         }
+    }
+
+    @Test
+    fun coroutineCancellationDuringTheCancelCallIsNeverSwallowed() = runTest {
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
+            ),
+        )
+
+        assertFailsWith<kotlinx.coroutines.CancellationException> {
+            adapter.purchase(
+                hostedRequest(
+                    cancel = RecordingCancelOperation(
+                        failure = kotlinx.coroutines.CancellationException("cancelled"),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun anUnconfirmedCancelThatResolvedThePaymentReportsSuccessFromTheNextRefresh() = runTest {
+        val cancel = RecordingCancelOperation(outcome = notCancelled())
+        var refreshCalls = 0
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
+            ),
+        )
+
+        val result = adapter.purchase(
+            hostedRequest(
+                profile = {
+                    refreshCalls += 1
+                    if (refreshCalls == 1) inactiveProfile() else activeProfile()
+                },
+                cancel = cancel,
+            ),
+        )
+
+        val success = assertIs<VitrinaKitPurchaseResult.Success>(result)
+        assertEquals("attempt-1", success.purchaseReference)
+        assertTrue(success.profile.hasAccess)
+        assertEquals(1, cancel.calls)
+        assertEquals(2, refreshCalls)
+    }
+
+    @Test
+    fun anUnconfirmedCancelWithoutAccessYetStaysPendingOnTheAttempt() = runTest {
+        val dismissedProfile = inactiveProfile()
+        val laterProfile = inactiveProfile()
+        var refreshCalls = 0
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
+            ),
+        )
+
+        val result = adapter.purchase(
+            hostedRequest(
+                profile = {
+                    refreshCalls += 1
+                    if (refreshCalls == 1) dismissedProfile else laterProfile
+                },
+                cancel = RecordingCancelOperation(outcome = notCancelled()),
+            ),
+        )
+
+        val pending = assertIs<VitrinaKitPurchaseResult.Pending>(result)
+        assertEquals("attempt-1", pending.attemptReference)
+        assertSame(laterProfile, pending.profile)
+        assertEquals(2, refreshCalls)
+    }
+
+    @Test
+    fun aFailedRefreshAfterAnUnconfirmedCancelStaysPendingWithTheEarlierProfile() = runTest {
+        val dismissedProfile = inactiveProfile()
+        var refreshCalls = 0
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
+            ),
+        )
+
+        val result = adapter.purchase(
+            hostedRequest(
+                cancel = RecordingCancelOperation(outcome = notCancelled()),
+                profileOperation = VitrinaKitHostedProfileOperation {
+                    refreshCalls += 1
+                    if (refreshCalls == 1) {
+                        VitrinaKitResult.Success(dismissedProfile)
+                    } else {
+                        VitrinaKitResult.Failure(VitrinaKitError.Network("Network request failed."))
+                    }
+                },
+            ),
+        )
+
+        val pending = assertIs<VitrinaKitPurchaseResult.Pending>(result)
+        assertEquals("attempt-1", pending.attemptReference)
+        assertSame(dismissedProfile, pending.profile)
+        assertEquals(2, refreshCalls)
+    }
+
+    @Test
+    fun facadeReportsADismissedCheckoutTheServerAnswersAsSucceededAsSuccess() = runTest {
+        val http = CancelSettlesPaymentHttpClient()
+        val adapter = HostedCheckoutAdapter(
+            hostedConfiguration(
+                launcher = HostedCheckoutLauncher { HostedCheckoutLauncherSignal.Dismissed },
+            ),
+        )
+        assertIs<VitrinaKitResult.Success<Unit>>(
+            VitrinaKit.activate(
+                VitrinaKitConfig.Builder("pk_public_test")
+                    .withHttpClient(http)
+                    .withHostedCheckoutAdapter(adapter)
+                    .build(),
+            ),
+        )
+        assertIs<VitrinaKitResult.Success<*>>(VitrinaKit.setSubscriberSession("opaque-session"))
+        val paywall = assertIs<VitrinaKitResult.Success<*>>(VitrinaKit.getPaywall("main"))
+        val product = (paywall.value as ru.vitrina.sdk.model.VitrinaKitPaywall).products.single()
+
+        val result = VitrinaKit.purchase(product)
+
+        val success = assertIs<VitrinaKitPurchaseResult.Success>(result)
+        assertEquals("attempt-1", success.purchaseReference)
+        assertTrue(success.profile.hasAccess)
+        assertEquals(1, http.requests.count { it.path == "/api/v1/purchase-attempts/attempt-1/cancel" })
     }
 
     @Test
@@ -891,12 +1036,18 @@ private fun hostedRequest(
     checkout: suspend () -> CheckoutSession = { checkoutSession() },
     profile: suspend () -> SubscriberState = { inactiveProfile() },
     cancel: RecordingCancelOperation = RecordingCancelOperation(),
+    profileOperation: VitrinaKitHostedProfileOperation =
+        VitrinaKitHostedProfileOperation { VitrinaKitResult.Success(profile()) },
 ): VitrinaKitHostedPurchaseRequest = VitrinaKitHostedPurchaseRequest(
     product = hostedProduct(),
     checkout = VitrinaKitHostedCheckoutOperation { _, _ -> VitrinaKitResult.Success(checkout()) },
-    profile = VitrinaKitHostedProfileOperation { VitrinaKitResult.Success(profile()) },
+    profile = profileOperation,
     cancel = cancel,
 )
+
+/** The server answered the cancel but did not confirm that the attempt ended as cancelled. */
+private fun notCancelled(): VitrinaKitResult<VitrinaKitHostedCancellation> =
+    VitrinaKitResult.Success(VitrinaKitHostedCancellation(cancelled = false, reason = null))
 
 private fun hostedRequestWithCheckoutFailure(
     error: VitrinaKitError,
@@ -1018,6 +1169,30 @@ private class HostedFacadeHttpClient(
     }
 }
 
+/**
+ * A server on which ending the checkout is what applies the buyer's payment: the profile shows no
+ * access until the cancel call has been answered, and the cancel answers with a succeeded attempt.
+ */
+private class CancelSettlesPaymentHttpClient : VitrinaHttpClient {
+    val requests = mutableListOf<VitrinaHttpRequest>()
+    private var paymentApplied = false
+
+    override suspend fun send(request: VitrinaHttpRequest): VitrinaHttpResponse {
+        requests += request
+        return when (request.path) {
+            "/api/v1/subscriber/me" ->
+                VitrinaHttpResponse(200, if (paymentApplied) ActiveProfileJson else InactiveProfileJson)
+            "/api/v1/paywall/main" -> VitrinaHttpResponse(200, PaywallJson)
+            "/api/v1/checkout/sessions" -> VitrinaHttpResponse(201, CheckoutJson)
+            "/api/v1/purchase-attempts/attempt-1/cancel" -> {
+                paymentApplied = true
+                VitrinaHttpResponse(200, SucceededAttemptJson)
+            }
+            else -> error("Unexpected request path: ${request.path}")
+        }
+    }
+}
+
 private const val InactiveProfileJson =
     """{"external_user_id":"user-1","has_access":false,"entitlements":[]}"""
 private const val ActiveProfileJson =
@@ -1026,3 +1201,5 @@ private const val PaywallJson =
     """{"placement_key":"main","products":[{"product_id":"product-1","product_key":"premium_monthly","product_name":"Premium","plan_id":"plan-1","plan_key":"premium","plan_name":"Premium","price_id":"price-1","amount_minor":9900,"currency":"RUB","interval_unit":"month","interval_count":1,"trial_interval_count":0,"highlighted":true,"sort_order":0,"entitlements":[{"key":"premium","name":"Premium"}]}]}"""
 private const val CheckoutJson =
     """{"id":"checkout-1","purchase_attempt_reference":"attempt-1","payment_id":"payment-1","provider_payment_id":"provider-payment-1","confirmation_url":"https://pay.example/confirm","status":"pending","expires_at":"2026-08-06T12:00:00Z","reused":false}"""
+private const val SucceededAttemptJson =
+    """{"reference":"attempt-1","status":"succeeded","expires_at":"2026-08-06T12:00:00Z","capability":"yookassa_hosted","presentation":{"product_id":"","package_name":"","account_binding":"binding-1"}}"""

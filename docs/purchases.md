@@ -98,6 +98,12 @@ launcher. A return/deep link is only a signal to refresh authoritative state;
 navigation never proves payment. Persist only `HostedCheckoutResumeState` using
 platform-protected storage. Do not persist checkout URLs or receipt addresses.
 
+A browser the buyer closes before access shows up ends the attempt on the
+server. The result follows the server's answer: `Cancelled` only when it
+confirms the cancellation, `Success` when the payment had already gone through
+and the refreshed profile grants access, and `Pending` when the outcome is not
+settled yet or the cancel request failed.
+
 ### Email verification required
 
 Hosted checkout refuses a subscriber without a verified email with

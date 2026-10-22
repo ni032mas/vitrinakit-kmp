@@ -20,6 +20,16 @@ interface VitrinaKitPurchaseAdapter {
     /** Capability packaged by this adapter. */
     val capability: VitrinaKitPurchaseCapability
 
+    /**
+     * Queries display prices without presenting purchase UI.
+     *
+     * Missing or ineligible references are omitted from a successful response. Adapters without
+     * store pricing return [VitrinaKitStorePriceQuery.Unsupported].
+     */
+    @VitrinaKitPurchaseAdapterApi
+    suspend fun queryStorePrices(products: List<VitrinaKitStoreProductRef>): VitrinaKitStorePriceQuery =
+        VitrinaKitStorePriceQuery.Unsupported
+
     /** Presents the server-issued instruction through the provider SDK. */
     @VitrinaKitPurchaseAdapterApi
     suspend fun present(instruction: VitrinaKitPurchaseInstruction): VitrinaKitAdapterPurchaseResult
@@ -65,6 +75,44 @@ interface VitrinaKitPurchaseAdapter {
      * The adapter must support lazy reinitialization if the SDK identifies a subscriber after logout.
      */
     fun close()
+}
+
+/**
+ * Store-owned identifiers for one price query.
+ *
+ * @property productId Store product identifier.
+ * @property priceId Optional store price identifier; Google Play requires an exact base-plan ID.
+ */
+data class VitrinaKitStoreProductRef(val productId: String, val priceId: String?)
+
+/**
+ * Localized display price returned by the store, not a server-confirmed charge.
+ *
+ * @property formattedPrice Store-formatted price to display verbatim.
+ * @property amountMicros Price in millionths of a currency unit, independent of currency precision.
+ * @property currencyCode ISO 4217 currency code supplied by the store.
+ */
+data class VitrinaKitStorePrice(val formattedPrice: String, val amountMicros: Long, val currencyCode: String)
+
+/** Outcome of an optional store price query. Missing prices never mean free access. */
+@VitrinaKitPurchaseAdapterApi
+sealed interface VitrinaKitStorePriceQuery {
+    /** This adapter does not provide store prices. */
+    data object Unsupported : VitrinaKitStorePriceQuery
+
+    /**
+     * Prices for eligible references; unpriced references are absent.
+     *
+     * @property prices Store prices keyed by the exact queried identifiers.
+     */
+    data class Priced(val prices: Map<VitrinaKitStoreProductRef, VitrinaKitStorePrice>) : VitrinaKitStorePriceQuery
+
+    /**
+     * The store query could not complete.
+     *
+     * @property error Safe provider error, without provider payloads.
+     */
+    data class Failure(val error: VitrinaKitAdapterError) : VitrinaKitStorePriceQuery
 }
 
 /**

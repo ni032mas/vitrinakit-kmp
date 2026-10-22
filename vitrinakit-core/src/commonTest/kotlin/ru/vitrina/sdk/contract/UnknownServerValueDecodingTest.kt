@@ -42,6 +42,22 @@ import kotlin.test.assertTrue
 class UnknownServerValueDecodingTest {
 
     @Test
+    fun unknownStoreCapabilityDecodesAsUnknown() = runTest {
+        val body = ServerContractFixtures.PAYWALL_MAIN_WITH_STORE_PRODUCTS
+            .replace("\"google_play\"", "\"future_store\"")
+        val paywall = assertIs<VitrinaResult.Success<Paywall>>(
+            client(body).fetchPaywall(
+                placementKey = "main",
+                externalUserId = "customer-1",
+                subscriberSession = null,
+            ),
+        ).value
+
+        assertEquals(VitrinaKitPurchaseCapability.UNKNOWN, paywall.products.single().storeProducts.first().capability)
+        assertEquals("premium_monthly", paywall.products.single().productKey)
+    }
+
+    @Test
     fun profileWithAnUnrecognizedStatusAndSourceStillDecodes() = runTest {
         val state = assertIs<VitrinaResult.Success<SubscriberState>>(
             client(UnknownValuesProfileJson).refreshSubscriber(externalUserId = "customer-1", subscriberSession = null),

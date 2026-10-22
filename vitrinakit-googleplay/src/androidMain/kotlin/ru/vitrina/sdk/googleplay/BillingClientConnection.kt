@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import ru.vitrina.sdk.purchase.VitrinaKitStorePrice
 
 internal enum class BillingResponseCode(val providerCode: Int) {
     SERVICE_TIMEOUT(-3),
@@ -46,6 +47,7 @@ internal data class BillingOffer(
     val basePlanId: String,
     val offerId: String?,
     val offerToken: String,
+    val price: VitrinaKitStorePrice? = null,
 ) {
     override fun toString(): String =
         "BillingOffer(basePlanId=$basePlanId, offerId=$offerId, offerToken=<redacted>)"
@@ -309,6 +311,15 @@ private fun ProductDetails.toDomain(): BillingProduct = BillingProduct(
             basePlanId = offer.basePlanId,
             offerId = offer.offerId,
             offerToken = offer.offerToken,
+            price = offer.pricingPhases.pricingPhaseList.singleOrNull { phase ->
+                phase.recurrenceMode == ProductDetails.RecurrenceMode.INFINITE_RECURRING
+            }?.let { phase ->
+                VitrinaKitStorePrice(
+                    formattedPrice = phase.formattedPrice,
+                    amountMicros = phase.priceAmountMicros,
+                    currencyCode = phase.priceCurrencyCode,
+                )
+            },
         )
     },
 )

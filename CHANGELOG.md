@@ -1,6 +1,6 @@
 # VitrinaKit KMP SDK Changelog
 
-## Unreleased
+## 0.1.0-rc.19
 
 Payments a hosted provider takes from several platforms can be told apart. One
 YooKassa shop sells to the iOS app, the Android app and desktop builds at once,

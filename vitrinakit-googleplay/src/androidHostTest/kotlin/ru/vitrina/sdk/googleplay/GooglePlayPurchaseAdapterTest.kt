@@ -33,6 +33,33 @@ import kotlin.test.assertTrue
 
 class GooglePlayPurchaseAdapterTest {
     @Test
+    fun priceQueryCannotReplaceDetailsSelectedForPendingLaunch() = runTest {
+        val gateway = FakeBillingGateway(products = listOf(pricedProduct()))
+        val launchDispatcher = HoldingDispatcher()
+        val adapter = GooglePlayPurchaseAdapter(
+            packageName = PACKAGE_NAME,
+            activityHandleProvider = { BillingActivityHandle(ActivityMarker) },
+            gatewayFactory = { gateway },
+            launchDispatcher = launchDispatcher,
+        )
+        val purchase = async { adapter.present(instruction()) }
+        runCurrent()
+        launchDispatcher.awaitDispatch()
+        gateway.products = listOf(pricedProduct().let { product ->
+            product.copy(offers = product.offers.map { it.copy(offerToken = "refreshed-token") })
+        })
+        val prices = async { adapter.queryStorePrices(listOf(storeRef())) }
+        runCurrent()
+        launchDispatcher.runAll()
+        runCurrent()
+        gateway.emit(purchased(TOKEN_ONE))
+
+        assertIs<VitrinaKitAdapterPurchaseResult.ProofReady>(purchase.await())
+        assertIs<VitrinaKitStorePriceQuery.Priced>(prices.await())
+        adapter.close()
+    }
+
+    @Test
     fun basePlanPriceIsReturnedVerbatim() = runTest {
         val gateway = FakeBillingGateway(products = listOf(pricedProduct()))
         val result = assertIs<VitrinaKitStorePriceQuery.Priced>(
@@ -1014,7 +1041,7 @@ private class HoldingDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
 }
 
 private class FakeBillingGateway(
-    private val products: List<BillingProduct>,
+    var products: List<BillingProduct>,
     private val launchCode: BillingResponseCode = BillingResponseCode.OK,
     private val connectCodes: ArrayDeque<BillingResponseCode> = ArrayDeque(listOf(BillingResponseCode.OK)),
     private val purchaseQueryCodes: ArrayDeque<BillingResponseCode> =
@@ -1031,6 +1058,7 @@ private class FakeBillingGateway(
     var closeCount = 0
     val launchThreads = Channel<String>(capacity = Channel.UNLIMITED)
     private var listener: ((BillingPurchaseUpdate) -> Unit)? = null
+    private val cachedProducts = mutableMapOf<String, BillingProduct>()
 
     override fun setPurchaseUpdateListener(listener: ((BillingPurchaseUpdate) -> Unit)?) {
         this.listener = listener
@@ -1044,6 +1072,7 @@ private class FakeBillingGateway(
     override suspend fun queryProductDetails(productId: String): BillingQueryResult<BillingProduct> {
         productQueries += productId
         val response = if (productQueryCodes.size > 1) productQueryCodes.removeFirst() else productQueryCodes.first()
+        if (response == BillingResponseCode.OK) products.forEach { cachedProducts[it.productId] = it }
         return BillingQueryResult(response, products)
     }
 
@@ -1060,6 +1089,10 @@ private class FakeBillingGateway(
 
     override fun launch(activity: BillingActivityHandle, request: BillingFlowRequest): BillingResponseCode {
         assertEquals(ActivityMarker, activity.value)
+        val details = cachedProducts[request.productId]
+        if (details?.offers?.none { it.offerToken == request.offerToken } != false) {
+            return BillingResponseCode.ITEM_UNAVAILABLE
+        }
         launchThreads.trySend(Thread.currentThread().name)
         launches += request
         afterLaunch()

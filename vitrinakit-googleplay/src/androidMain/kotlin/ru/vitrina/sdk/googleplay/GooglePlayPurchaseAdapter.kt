@@ -75,13 +75,14 @@ class GooglePlayPurchaseAdapter internal constructor(
     /** Returns recurring base-plan prices verbatim, without launching billing UI. */
     override suspend fun queryStorePrices(
         products: List<VitrinaKitStoreProductRef>,
-    ): VitrinaKitStorePriceQuery {
+    ): VitrinaKitStorePriceQuery = presentationMutex.withLock {
+        // Both operations share native ProductDetails cached for the selected checkout offer.
         val prices = mutableMapOf<VitrinaKitStoreProductRef, VitrinaKitStorePrice>()
         val connection = resources().connection
         for ((productId, references) in products.groupBy { it.productId }) {
             val result = connection.queryProductDetails(productId = productId)
             if (result.responseCode != BillingResponseCode.OK) {
-                return VitrinaKitStorePriceQuery.Failure(
+                return@withLock VitrinaKitStorePriceQuery.Failure(
                     adapterError(
                         responseCode = result.responseCode,
                         message = "Google Play store prices are unavailable.",
@@ -95,7 +96,7 @@ class GooglePlayPurchaseAdapter internal constructor(
                 prices[reference] = price
             }
         }
-        return VitrinaKitStorePriceQuery.Priced(prices)
+        VitrinaKitStorePriceQuery.Priced(prices)
     }
 
     /** Presents a fresh server instruction or recovers an already visible matching purchase. */

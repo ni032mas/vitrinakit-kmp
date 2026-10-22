@@ -1,6 +1,6 @@
 # VitrinaKit KMP SDK Changelog
 
-## Unreleased
+## 0.1.0-rc.20
 
 ### Added
 

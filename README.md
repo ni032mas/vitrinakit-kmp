@@ -92,6 +92,11 @@ Hosted checkout uses `withHostedCheckoutAdapter(...)` instead. Activation
 rejects a blank publishable key and any configuration with zero or multiple
 adapters.
 
+Every call names the platform it comes from in `X-Vitrina-Client-Platform`
+(`android`, `ios`, or the desktop OS on the JVM artifact), so payments one
+hosted provider shop takes from several platforms stay attributable. There is
+nothing to configure.
+
 The SDK starts in installation scope and immediately begins a non-blocking
 store restore. Use `profile.accessResolution` when a screen must distinguish
 confirmed access from the initial `CHECKING` state.

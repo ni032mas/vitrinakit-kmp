@@ -1,5 +1,22 @@
 # VitrinaKit KMP SDK Changelog
 
+## 0.1.0-rc.19
+
+Payments a hosted provider takes from several platforms can be told apart. One
+YooKassa shop sells to the iOS app, the Android app and desktop builds at once,
+and until now no request said which platform it came from.
+
+### Added
+
+- Every API call carries `X-Vitrina-Client-Platform`: `android` from the
+  Android artifact, `ios` from the iOS artifacts, and from the JVM artifact the
+  host OS (`macos`, `windows`, `linux`). The API records it on every purchase
+  attempt it creates. A JVM on any other OS sends no header, which the API
+  records as `unknown`. No public API change and nothing to configure.
+- It is a header rather than a request field, so this release works against
+  every VitrinaKit API deployment: an API that predates the header ignores it,
+  while an unknown request field would refuse the purchase.
+
 ## 0.1.0-rc.18
 
 Forward-compatibility fix. One value the API introduced after an SDK release

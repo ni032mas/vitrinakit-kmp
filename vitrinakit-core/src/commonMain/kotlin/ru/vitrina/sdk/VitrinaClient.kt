@@ -26,6 +26,8 @@ import ru.vitrina.sdk.model.VitrinaCheckoutErrorCode
 import ru.vitrina.sdk.model.VitrinaError
 import ru.vitrina.sdk.model.VitrinaResult
 import ru.vitrina.sdk.model.VitrinaKitIdentifyResult
+import ru.vitrina.sdk.platform.currentClientPlatform
+import ru.vitrina.sdk.platform.headerValue
 import ru.vitrina.sdk.purchase.PurchaseApi
 import ru.vitrina.sdk.purchase.PurchaseApiResult
 import ru.vitrina.sdk.purchase.PurchaseAttempt
@@ -58,6 +60,7 @@ internal data class VitrinaConfig(
 ) {
     internal val baseUrl: String = VitrinaKitApiBaseUrl
     internal val environment = VitrinaKitApiEnvironment
+    internal val clientPlatform = currentClientPlatform()
 }
 
 /**
@@ -516,6 +519,7 @@ internal class VitrinaClient(
         put("Content-Type", "application/json")
         put(InstallationIdHeader, installationId)
         put("X-Vitrina-Environment", config.environment.name)
+        config.clientPlatform?.let { platform -> put(ClientPlatformHeader, platform.headerValue) }
     }
 
     private fun subscriberHeaders(subscriberId: String?, sessionToken: String?): Map<String, String> = buildMap {
@@ -761,6 +765,7 @@ private const val ByteMask = 0xFF
 private const val HexRadix = 16
 private const val HexWidth = 2
 private const val InstallationIdHeader = "X-Vitrina-Installation-Id"
+private const val ClientPlatformHeader = "X-Vitrina-Client-Platform"
 private const val SubscriberIdHeader = "X-Vitrina-Subscriber-Id"
 private const val IdempotencyHeader = "Idempotency-Key"
 private const val RetryableField = "retryable"

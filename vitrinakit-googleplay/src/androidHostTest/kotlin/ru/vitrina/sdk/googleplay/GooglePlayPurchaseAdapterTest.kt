@@ -22,6 +22,9 @@ import kotlin.coroutines.CoroutineContext
 import ru.vitrina.sdk.purchase.VitrinaKitAdapterPurchaseResult
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseInstruction
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseResumeData
+import ru.vitrina.sdk.purchase.VitrinaKitStorePrice
+import ru.vitrina.sdk.purchase.VitrinaKitStorePriceQuery
+import ru.vitrina.sdk.purchase.VitrinaKitStoreProductRef
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -29,6 +32,115 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class GooglePlayPurchaseAdapterTest {
+    @Test
+    fun basePlanPriceIsReturnedVerbatim() = runTest {
+        val gateway = FakeBillingGateway(products = listOf(pricedProduct()))
+        val result = assertIs<VitrinaKitStorePriceQuery.Priced>(
+            adapter(gateway).queryStorePrices(listOf(storeRef())),
+        )
+
+        assertEquals(VitrinaKitStorePrice("\$4.99", 4_990_000L, "USD"), result.prices[storeRef()])
+        assertTrue(gateway.launches.isEmpty())
+    }
+
+    @Test
+    fun productMissingInPlayIsAbsentFromPrices() = runTest {
+        val gateway = FakeBillingGateway(products = emptyList())
+        val result = assertIs<VitrinaKitStorePriceQuery.Priced>(
+            adapter(gateway).queryStorePrices(listOf(storeRef())),
+        )
+
+        assertEquals(emptyMap(), result.prices)
+    }
+
+    @Test
+    fun promotionalOnlyBasePlanIsAbsentFromPrices() = runTest {
+        val promotional = pricedProduct().let { product ->
+            product.copy(offers = product.offers.map { it.copy(offerId = "intro") })
+        }
+        val result = assertIs<VitrinaKitStorePriceQuery.Priced>(
+            adapter(FakeBillingGateway(products = listOf(promotional)))
+                .queryStorePrices(listOf(storeRef())),
+        )
+
+        assertEquals(emptyMap(), result.prices)
+    }
+
+    @Test
+    fun billingUnavailableReturnsRetryableFailure() = runTest {
+        val gateway = FakeBillingGateway(
+            products = listOf(pricedProduct()),
+            connectCodes = ArrayDeque(listOf(BillingResponseCode.SERVICE_UNAVAILABLE)),
+        )
+        val result = assertIs<VitrinaKitStorePriceQuery.Failure>(
+            adapter(gateway).queryStorePrices(listOf(storeRef())),
+        )
+
+        assertTrue(result.error.retryable)
+        assertEquals("GPB-2", result.error.supportReference)
+        assertTrue(gateway.productQueries.isEmpty())
+    }
+
+    @Test
+    fun priceQueryReconnectsAfterServiceDisconnect() = runTest {
+        val gateway = FakeBillingGateway(
+            products = listOf(pricedProduct()),
+            productQueryCodes = ArrayDeque(listOf(BillingResponseCode.SERVICE_DISCONNECTED, BillingResponseCode.OK)),
+        )
+        val result = assertIs<VitrinaKitStorePriceQuery.Priced>(
+            adapter(gateway).queryStorePrices(listOf(storeRef())),
+        )
+
+        assertEquals(VitrinaKitStorePrice("\$4.99", 4_990_000L, "USD"), result.prices[storeRef()])
+        assertEquals(2, gateway.connectCount)
+    }
+
+    @Test
+    fun productDetailsAreQueriedOncePerProduct() = runTest {
+        val yearly = VitrinaKitStoreProductRef(PRODUCT_ID, "yearly")
+        val product = pricedProduct().let { product ->
+            product.copy(
+                offers = product.offers + product.offers.single().copy(
+                    basePlanId = "yearly",
+                    price = VitrinaKitStorePrice("\$49.99", 49_990_000L, "USD"),
+                ),
+            )
+        }
+        val gateway = FakeBillingGateway(products = listOf(product))
+        val result = assertIs<VitrinaKitStorePriceQuery.Priced>(
+            adapter(gateway).queryStorePrices(listOf(storeRef(), yearly, storeRef())),
+        )
+
+        assertEquals(VitrinaKitStorePrice("\$4.99", 4_990_000L, "USD"), result.prices[storeRef()])
+        assertEquals(VitrinaKitStorePrice("\$49.99", 49_990_000L, "USD"), result.prices[yearly])
+        assertEquals(listOf(PRODUCT_ID), gateway.productQueries)
+    }
+
+    @Test
+    fun missingOrAmbiguousBasePlanDoesNotGuessAPrice() = runTest {
+        val product = pricedProduct().let { it.copy(offers = it.offers + it.offers) }
+        val result = assertIs<VitrinaKitStorePriceQuery.Priced>(
+            adapter(FakeBillingGateway(products = listOf(product)))
+                .queryStorePrices(listOf(storeRef(), VitrinaKitStoreProductRef(PRODUCT_ID, null))),
+        )
+
+        assertEquals(emptyMap(), result.prices)
+    }
+
+    private fun storeRef() = VitrinaKitStoreProductRef(PRODUCT_ID, BASE_PLAN_ID)
+
+    private fun pricedProduct(): BillingProduct = BillingProduct(
+        productId = PRODUCT_ID,
+        offers = listOf(
+            BillingOffer(
+                basePlanId = BASE_PLAN_ID,
+                offerId = null,
+                offerToken = "base-token",
+                price = VitrinaKitStorePrice("\$4.99", 4_990_000L, "USD"),
+            ),
+        ),
+    )
+
     @Test
     fun backgroundCallerLooksUpActivityAndLaunchesOnConfiguredMainContext() = runTest {
         val mainExecutor = Executors.newSingleThreadExecutor { task ->
@@ -909,6 +1021,7 @@ private class FakeBillingGateway(
         ArrayDeque(listOf(BillingResponseCode.OK)),
     private val afterLaunch: () -> Unit = {},
     private val beforePurchaseQuery: suspend (Int) -> Unit = {},
+    private val productQueryCodes: ArrayDeque<BillingResponseCode> = ArrayDeque(listOf(BillingResponseCode.OK)),
 ) : GooglePlayBillingGateway {
     var purchases: List<BillingPurchase> = emptyList()
     val productQueries = mutableListOf<String>()
@@ -930,7 +1043,8 @@ private class FakeBillingGateway(
 
     override suspend fun queryProductDetails(productId: String): BillingQueryResult<BillingProduct> {
         productQueries += productId
-        return BillingQueryResult(BillingResponseCode.OK, products)
+        val response = if (productQueryCodes.size > 1) productQueryCodes.removeFirst() else productQueryCodes.first()
+        return BillingQueryResult(response, products)
     }
 
     override suspend fun queryPurchases(): BillingQueryResult<BillingPurchase> {

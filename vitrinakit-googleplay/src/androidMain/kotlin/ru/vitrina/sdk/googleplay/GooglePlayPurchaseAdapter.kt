@@ -23,6 +23,9 @@ import ru.vitrina.sdk.purchase.VitrinaKitPurchaseCapability
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseInstruction
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseResumeData
 import ru.vitrina.sdk.purchase.VitrinaKitRestorablePurchase
+import ru.vitrina.sdk.purchase.VitrinaKitStorePrice
+import ru.vitrina.sdk.purchase.VitrinaKitStorePriceQuery
+import ru.vitrina.sdk.purchase.VitrinaKitStoreProductRef
 
 /**
  * Google Play Billing adapter for the provider-neutral VitrinaKit purchase boundary.
@@ -68,6 +71,32 @@ class GooglePlayPurchaseAdapter internal constructor(
     private var lastForegroundQuery: ForegroundQuery? = null
     private var activeWaiter: ActivePurchaseWaiter? = null
     private var billingResources: BillingResources? = createResources()
+
+    /** Returns recurring base-plan prices verbatim, without launching billing UI. */
+    override suspend fun queryStorePrices(
+        products: List<VitrinaKitStoreProductRef>,
+    ): VitrinaKitStorePriceQuery {
+        val prices = mutableMapOf<VitrinaKitStoreProductRef, VitrinaKitStorePrice>()
+        val connection = resources().connection
+        for ((productId, references) in products.groupBy { it.productId }) {
+            val result = connection.queryProductDetails(productId = productId)
+            if (result.responseCode != BillingResponseCode.OK) {
+                return VitrinaKitStorePriceQuery.Failure(
+                    adapterError(
+                        responseCode = result.responseCode,
+                        message = "Google Play store prices are unavailable.",
+                    ),
+                )
+            }
+            val product = result.values.singleOrNull { it.productId == productId } ?: continue
+            for (reference in references) {
+                val basePlanId = reference.priceId ?: continue
+                val price = selectBasePlanOffer(product = product, basePlanId = basePlanId)?.price ?: continue
+                prices[reference] = price
+            }
+        }
+        return VitrinaKitStorePriceQuery.Priced(prices)
+    }
 
     /** Presents a fresh server instruction or recovers an already visible matching purchase. */
     override suspend fun present(

@@ -72,7 +72,7 @@ class ServerContractDecodingTest {
     }
 
     @Test
-    fun paywallDecodes() = runTest {
+    fun paywallWithoutStoreProductsDecodes() = runTest {
         val paywall = assertIs<VitrinaResult.Success<Paywall>>(
             client(ServerContractFixtures.PAYWALL_MAIN).fetchPaywall(
                 placementKey = "main",
@@ -83,6 +83,25 @@ class ServerContractDecodingTest {
 
         assertEquals("main", paywall.placementKey)
         assertEquals("premium_monthly", paywall.products.single().productKey)
+        assertEquals(emptyList(), paywall.products.single().storeProducts)
+    }
+
+    @Test
+    fun paywallWithStoreProductsDecodes() = runTest {
+        val paywall = assertIs<VitrinaResult.Success<Paywall>>(
+            client(ServerContractFixtures.PAYWALL_MAIN_WITH_STORE_PRODUCTS).fetchPaywall(
+                placementKey = "main",
+                externalUserId = "customer-1",
+                subscriberSession = null,
+            ),
+        ).value
+
+        val (google, rustore) = paywall.products.single().storeProducts
+        assertEquals(VitrinaKitPurchaseCapability.GOOGLE_PLAY, google.capability)
+        assertEquals("premium_monthly", google.productId)
+        assertEquals("monthly", google.priceId)
+        assertEquals(VitrinaKitPurchaseCapability.RUSTORE, rustore.capability)
+        assertNull(rustore.priceId)
     }
 
     @Test

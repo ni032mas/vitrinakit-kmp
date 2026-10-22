@@ -158,6 +158,33 @@ internal object ServerContractFixtures {
 }
 """
 
+    const val PAYWALL_MAIN_WITH_STORE_PRODUCTS = """
+{
+  "placement_key": "main",
+  "products": [
+    {
+      "amount_minor": 29900,
+      "currency": "RUB",
+      "highlighted": true,
+      "interval_count": 1,
+      "interval_unit": "month",
+      "plan_id": "55555555-5555-5555-5555-555555555555",
+      "plan_key": "premium",
+      "plan_name": "Premium",
+      "price_id": "66666666-6666-6666-6666-666666666666",
+      "product_id": "44444444-4444-4444-4444-444444444444",
+      "product_key": "premium_monthly",
+      "product_name": "Premium",
+      "sort_order": 10,
+      "store_products": [
+        { "capability": "google_play", "product_id": "premium_monthly", "price_id": "monthly" },
+        { "capability": "rustore", "product_id": "premium_monthly" }
+      ]
+    }
+  ]
+}
+"""
+
     const val PURCHASE_START_GOOGLE_FRESH = """
 {
   "capability": "google_play",

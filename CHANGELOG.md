@@ -1,5 +1,34 @@
 # VitrinaKit KMP SDK Changelog
 
+## Unreleased
+
+### Added
+
+- `PaywallProduct.storeProducts` decodes optional store product and price
+  identifiers from public paywall and published-offer responses. Responses
+  without the field remain valid; unknown capabilities decode as `UNKNOWN`.
+- `VitrinaKit.purchaseCapability()` exposes the configured native capability or
+  `YOOKASSA_HOSTED`, and returns `null` before activation.
+- `VitrinaKit.getStorePrices(paywall)` returns store prices keyed by catalog
+  `productKey`. Unpriced products are omitted; hosted checkout, unsupported
+  adapters and products without matching references return an empty map.
+- Optional adapter price queries expose store-formatted prices, amounts in
+  millionths and currency codes without exposing store SDK types. Google Play
+  selects only the recurring phase of the exact base plan without a promotional
+  offer. Query failures surface as provider errors, never catalog-price fallbacks.
+
+### Fixed
+
+- Concurrent Google Play price queries cannot replace native product details
+  selected for an in-flight checkout with a different offer token.
+
+### Compatibility
+
+- The wire contract and adapter source API additions are additive. Consumers
+  must recompile against the new artifacts: Kotlin model constructors and native
+  exports changed. Swift callers constructing `PaywallProduct` must supply
+  `storeProducts` because Objective-C export does not preserve Kotlin defaults.
+
 ## 0.1.0-rc.19
 
 Payments a hosted provider takes from several platforms can be told apart. One

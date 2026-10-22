@@ -3,6 +3,8 @@ package ru.vitrina.sdk.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseCapability
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseCapabilitySerializer
 
 /**
  * VitrinaKit API environment used by the SDK.
@@ -122,6 +124,23 @@ data class Entitlement(
     val name: String,
 )
 
+
+/**
+ * Store identifiers published for an active store channel on a paywall product.
+ *
+ * @property capability Store purchase capability; unrecognized wire values decode as UNKNOWN.
+ * @property productId Store-owned product identifier, not the catalog product identifier.
+ * @property priceId Optional store price identifier, such as a Google Play base-plan identifier.
+ */
+@Serializable
+data class PaywallStoreProduct(
+    @Serializable(with = VitrinaKitPurchaseCapabilitySerializer::class)
+    val capability: VitrinaKitPurchaseCapability,
+    @SerialName("product_id")
+    val productId: String,
+    @SerialName("price_id")
+    val priceId: String? = null,
+)
 /**
  * Product and price option rendered inside a paywall.
  *
@@ -141,6 +160,7 @@ data class Entitlement(
  * @property highlighted Whether this option should be visually highlighted.
  * @property sortOrder Server-defined display order.
  * @property entitlements Entitlements granted by this option.
+ * @property storeProducts Store references available for querying localized prices.
  */
 @Serializable
 data class PaywallProduct(
@@ -191,6 +211,9 @@ data class PaywallProduct(
     val sortOrder: Int,
     /** Entitlements granted by this option. */
     val entitlements: List<Entitlement> = emptyList(),
+    /** Store references; empty when the API publishes no configured store channel. */
+    @SerialName("store_products")
+    val storeProducts: List<PaywallStoreProduct> = emptyList(),
 )
 
 /**

@@ -48,6 +48,10 @@ import ru.vitrina.sdk.purchase.PurchaseApiResult
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAttemptStatus
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapter
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseAdapterApi
+import ru.vitrina.sdk.purchase.VitrinaKitPurchaseCapability
+import ru.vitrina.sdk.purchase.VitrinaKitStorePrice
+import ru.vitrina.sdk.purchase.VitrinaKitStorePriceQuery
+import ru.vitrina.sdk.purchase.VitrinaKitStoreProductRef
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseError
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseErrorCode
 import ru.vitrina.sdk.purchase.VitrinaKitPurchaseResult
@@ -150,6 +154,7 @@ object VitrinaKit {
         val nextRuntime = VitrinaKitRuntime(
             client = client,
             cache = cache,
+            purchaseAdapter = nativeAdapter,
             coordinator = nativeAdapter?.let { adapter ->
                 PurchaseCoordinator(
                     adapter = adapter,
@@ -272,6 +277,64 @@ object VitrinaKit {
     /** Returns the products attached to a paywall. */
     fun getPaywallProducts(paywall: VitrinaKitPaywall): VitrinaKitResult<List<VitrinaKitPaywallProduct>> =
         VitrinaKitResult.Success(paywall.products)
+
+    /**
+     * Returns the packaged adapter capability, or `null` before successful activation.
+     *
+     * Hosted checkout registered with [VitrinaKitConfig.Builder.withHostedCheckoutAdapter] reports
+     * [VitrinaKitPurchaseCapability.YOOKASSA_HOSTED]. No runtime provider selection is performed.
+     */
+    fun purchaseCapability(): VitrinaKitPurchaseCapability? {
+        val active = lifecycleState.value.runtime ?: return null
+        return active.purchaseAdapter?.capability
+            ?: VitrinaKitPurchaseCapability.YOOKASSA_HOSTED.takeIf { active.hostedPurchaseAdapter != null }
+    }
+
+    /**
+     * Queries store prices for this paywall, keyed by catalog product key.
+     *
+     * Only references matching the configured purchase capability are queried. Missing prices are
+     * absent, never free or replaced with catalog prices. Hosted checkout, unsupported adapters and
+     * products without store references return an empty map. A query failure returns a provider
+     * error. This is display metadata, not proof of payment or a guarantee of purchase eligibility.
+     */
+    suspend fun getStorePrices(
+        paywall: VitrinaKitPaywall,
+    ): VitrinaKitResult<Map<String, VitrinaKitStorePrice>> {
+        val current = lifecycleState.value
+        val active = current.runtime ?: return notActivated()
+        val adapter = active.purchaseAdapter ?: return VitrinaKitResult.Success(emptyMap())
+        val referencesByKey = paywall.products.mapNotNull { product ->
+            product.storeProducts.firstOrNull { it.capability == adapter.capability }?.let { reference ->
+                product.productKey to VitrinaKitStoreProductRef(reference.productId, reference.priceId)
+            }
+        }
+        if (referencesByKey.isEmpty()) return VitrinaKitResult.Success(emptyMap())
+        return lifecycleLease.runSideEffect {
+            if (!isSameIdentityLifecycle(current)) return@runSideEffect staleIdentityTransition()
+            val query = runCatching {
+                adapter.queryStorePrices(referencesByKey.map { it.second }.distinct())
+            }.getOrElse { throwable ->
+                if (throwable is CancellationException) throw throwable
+                return@runSideEffect VitrinaKitResult.Failure(
+                    VitrinaKitError.Provider("The purchase adapter could not query store prices."),
+                )
+            }
+            when (query) {
+                VitrinaKitStorePriceQuery.Unsupported -> VitrinaKitResult.Success(emptyMap())
+                is VitrinaKitStorePriceQuery.Failure -> VitrinaKitResult.Failure(
+                    VitrinaKitError.Provider("The purchase adapter could not query store prices."),
+                )
+                is VitrinaKitStorePriceQuery.Priced -> VitrinaKitResult.Success(
+                    buildMap {
+                        for ((key, reference) in referencesByKey) {
+                            query.prices[reference]?.let { price -> put(key, price) }
+                        }
+                    },
+                )
+            }
+        }
+    }
 
     /** Starts one provider-neutral purchase for the currently identified subscriber. */
     suspend fun purchase(product: VitrinaKitPaywallProduct): VitrinaKitPurchaseResult {
@@ -1267,6 +1330,7 @@ private fun <T> staleIdentityTransition(): VitrinaKitResult<T> = VitrinaKitResul
 private data class VitrinaKitRuntime(
     val client: VitrinaClient,
     val cache: SubscriberCache,
+    val purchaseAdapter: VitrinaKitPurchaseAdapter?,
     val coordinator: PurchaseCoordinator?,
     val hostedMigrationAdapter: VitrinaKitHostedMigrationAdapter?,
     val hostedPurchaseAdapter: VitrinaKitHostedPurchaseAdapter?,

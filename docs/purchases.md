@@ -15,6 +15,63 @@ Install the core plus exactly one provider adapter in each application artifact.
 Provider selection belongs to build variants and composition roots. Runtime
 country, locale, SIM, IP address, or device language must never switch billing.
 
+## Store prices before purchase
+
+`VitrinaKit.purchaseCapability()` reports the configured native capability, or
+`YOOKASSA_HOSTED` for a hosted checkout adapter. It returns `null` before activation.
+This describes the packaged provider, not the source of an existing subscription.
+
+Paywall products returned by `GET /api/v1/paywall/{key}` and
+`GET /api/v1/published-offers/{key}` can include `store_products`:
+
+```json
+{
+  "store_products": [
+    { "capability": "google_play", "product_id": "premium_monthly", "price_id": "monthly" }
+  ]
+}
+```
+
+The SDK decodes these as `PaywallProduct.storeProducts`. Missing fields default to
+an empty list; unknown capabilities decode as `UNKNOWN`. `price_id` is optional
+in the wire contract, but Google Play requires an exact base-plan identifier to
+resolve a price.
+
+```kotlin
+when (val result = VitrinaKit.getStorePrices(paywall)) {
+    is VitrinaKitResult.Success -> {
+        val price = result.value[selectedProduct.productKey]
+        if (price == null) showStorePriceUnavailable()
+        else showPrice(price.formattedPrice)
+    }
+    is VitrinaKitResult.Failure -> showPriceQueryFailure(result.error)
+}
+```
+
+For store-priced checkout, an absent price means unavailable, never free. Disable
+purchase for that option; do not substitute its catalog price. A partial response
+can still contain prices for other options. Hosted checkout, unsupported adapters
+and products without matching store references return a successful empty map; use
+catalog pricing for hosted checkout.
+
+`VitrinaKitStorePrice` carries the store-formatted string, `amountMicros` (millionths
+of a currency unit) and `currencyCode`. Display the formatted string verbatim.
+Compare numeric prices only within the same currency. Display prices do not grant
+access or guarantee purchase eligibility; the store and server remain authoritative.
+
+Google Play resolves only the recurring phase of the exact base plan with no
+promotional offer (`offerId == null`). It queries each distinct store product once
+per call, reconnects using the existing billing connection policy, and returns a
+provider failure if the query cannot complete. Repeated calls and purchase
+presentation query fresh product details. No receipt or purchase UI is opened by
+the price query, and Play Billing types remain private to `vitrinakit-googleplay`.
+Display queries serialize with purchase presentation so they cannot replace
+native product details selected for an in-flight checkout.
+
+Custom adapters may implement the opt-in `queryStorePrices` boundary; the default
+returns `VitrinaKitStorePriceQuery.Unsupported`. Existing adapters do not need to
+implement store pricing.
+
 ## Result handling
 
 Handle every purchase outcome:

@@ -124,7 +124,6 @@ data class Entitlement(
     val name: String,
 )
 
-
 /**
  * Store identifiers published for an active store channel on a paywall product.
  *
@@ -141,6 +140,7 @@ data class PaywallStoreProduct(
     @SerialName("price_id")
     val priceId: String? = null,
 )
+
 /**
  * Product and price option rendered inside a paywall.
  *

@@ -470,13 +470,13 @@ Release candidate for the Adapty-style VitrinaKit mobile SDK facade.
 
 ## 0.1.0-rc.2
 
-Compatibility release candidate for LitoFit mobile integration.
+Compatibility release candidate for mobile integrations.
 
 ### Changed
 
-- Build SDK artifacts with Kotlin `2.3.20` so LitoFit's current Kotlin/Native
-  compiler can consume iOS KLIB artifacts without ABI incompatibility.
-- Align coroutine dependencies with the LitoFit mobile stack.
+- Build SDK artifacts with Kotlin `2.3.20` for Kotlin/Native compatibility
+  when consuming iOS KLIB artifacts.
+- Align coroutine dependencies with the supported Kotlin toolchain.
 
 ### Release Channel
 
@@ -485,7 +485,7 @@ Compatibility release candidate for LitoFit mobile integration.
 
 ## 0.1.0-rc.1
 
-First LitoFit release candidate.
+First SDK release candidate.
 
 ### Added
 

@@ -6,10 +6,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The response body documented in `obsidian/docs/architecture/integration-contract.md`
- * under "Paywall Retrieval", byte-for-byte. It has no `paywall_id`, `config`, or
- * `fallback_config` fields: "The response has no paywall configuration, experiment,
- * variant, or fallback fields."
+ * Representative response body for `GET /api/v1/paywall/{key}`.
+ * It has no `paywall_id`, `config`, or `fallback_config` fields: the response contains
+ * no paywall configuration, experiment, variant, or fallback fields.
  */
 private const val DocumentedPaywallResponseJson = """
 {
